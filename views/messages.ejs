@@ -1,0 +1,32 @@
+<%- include('header', { title: 'Сообщения' }) %>
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="glass p-4">
+            <h4 class="fw-semibold mb-3">Сообщения</h4>
+            <% if(conversations.length === 0) { %>
+                <div class="text-center py-5">
+                    <i class="bi bi-inbox fs-1 text-muted"></i>
+                    <p class="text-muted mt-2">У вас пока нет диалогов</p>
+                    <a href="/" class="btn btn-primary-dark mt-2">Найти друзей</a>
+                </div>
+            <% } else { %>
+                <% conversations.forEach(c => { %>
+                    <a href="/messages/chat/<%= c.other_user_id %>" class="text-decoration-none">
+                        <div class="d-flex align-items-center gap-3 p-3 rounded-3 mb-2 glass" style="transition:0.2s;">
+                            <img src="/uploads/<%= c.avatar %>" class="avatar-md" onerror="this.src='/uploads/default.png'">
+                            <div class="flex-grow-1">
+                                <div class="d-flex justify-content-between">
+                                    <strong class="text-white"><%= c.username %></strong>
+                                    <% if(c.unread > 0) { %><span class="badge bg-primary"><%= c.unread %></span><% } %>
+                                </div>
+                                <div class="small text-muted"><%= c.last_message ? c.last_message.slice(0,50) : 'Нет сообщений' %></div>
+                            </div>
+                        </div>
+                    </a>
+                <% }) %>
+            <% } %>
+        </div>
+    </div>
+</div>
+</body>
+</html>

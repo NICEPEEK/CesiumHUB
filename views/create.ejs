@@ -1,0 +1,23 @@
+<%- include('header', { title: 'Создать пост' }) %>
+<div class="row justify-content-center">
+    <div class="col-md-7">
+        <div class="glass p-4">
+            <h4 class="fw-semibold mb-4">Новая публикация</h4>
+            <form method="POST" action="/create" enctype="multipart/form-data">
+                <div class="mb-3">
+                    <input type="text" name="title" class="form-control" placeholder="Заголовок" required>
+                </div>
+                <div class="mb-3">
+                    <textarea name="description" class="form-control" rows="5" placeholder="Описание" required></textarea>
+                </div>
+                <div class="mb-4">
+                    <input type="file" name="media" class="form-control" accept="image/*,video/mp4">
+                    <small class="text-muted">Можно загрузить изображение или видео</small>
+                </div>
+                <button type="submit" class="btn btn-primary-dark w-100">Опубликовать</button>
+            </form>
+        </div>
+    </div>
+</div>
+</body>
+</html>

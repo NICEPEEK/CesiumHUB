@@ -1,0 +1,17 @@
+<%- include('header', { title: 'Регистрация' }) %>
+<div class="row justify-content-center mt-5">
+    <div class="col-md-5">
+        <div class="glass p-4">
+            <h3 class="fw-bold text-center mb-4">Регистрация</h3>
+            <% if(error) { %><div class="alert alert-danger"><%= error %></div><% } %>
+            <form method="POST" action="/register">
+                <div class="mb-3"><label class="form-label">Никнейм</label><input type="text" name="username" class="form-control" required></div>
+                <div class="mb-4"><label class="form-label">Пароль</label><input type="password" name="password" class="form-control" required></div>
+                <button type="submit" class="btn btn-primary-dark w-100">Создать аккаунт</button>
+                <div class="text-center mt-3"><a href="/login" class="text-decoration-none text-accent">Уже есть аккаунт? Войти</a></div>
+            </form>
+        </div>
+    </div>
+</div>
+</body>
+</html>

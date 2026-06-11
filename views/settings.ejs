@@ -1,0 +1,50 @@
+<%- include('header', { title: 'Настройки' }) %>
+<div class="row justify-content-center">
+    <div class="col-md-7">
+        <div class="glass p-4">
+            <h4 class="fw-semibold mb-3">Настройки профиля</h4>
+            <div class="text-center mb-4">
+                <img src="/uploads/<%= user.avatar %>" class="avatar-lg" onerror="this.src='/uploads/default.png'">
+                <h5 class="mt-2"><%= user.username %></h5>
+            </div>
+            <ul class="nav nav-pills mb-4 justify-content-center gap-2">
+                <li class="nav-item"><button class="btn btn-primary-dark active" data-bs-toggle="pill" data-bs-target="#avatarTab">Аватар</button></li>
+                <li class="nav-item"><button class="btn btn-outline-dark" data-bs-toggle="pill" data-bs-target="#usernameTab">Сменить ник</button></li>
+                <li class="nav-item"><button class="btn btn-outline-dark" data-bs-toggle="pill" data-bs-target="#passwordTab">Сменить пароль</button></li>
+            </ul>
+            <div class="tab-content">
+                <div class="tab-pane fade show active" id="avatarTab">
+                    <form action="/settings/avatar" method="POST" enctype="multipart/form-data">
+                        <input type="file" name="avatar" class="form-control mb-3" accept="image/*" required>
+                        <button class="btn btn-primary-dark w-100">Обновить аватар</button>
+                    </form>
+                </div>
+                <div class="tab-pane fade" id="usernameTab">
+                    <form action="/settings/username" method="POST">
+                        <input type="text" name="username" class="form-control mb-3" placeholder="Новый ник" required>
+                        <button class="btn btn-primary-dark w-100">Сменить ник</button>
+                    </form>
+                </div>
+                <div class="tab-pane fade" id="passwordTab">
+                    <form action="/settings/password" method="POST" id="passwordForm">
+                        <input type="password" name="oldPassword" class="form-control mb-2" placeholder="Текущий пароль" required>
+                        <input type="password" name="newPassword" class="form-control mb-2" placeholder="Новый пароль" required>
+                        <input type="password" name="confirmPassword" class="form-control mb-3" placeholder="Подтвердите пароль" required>
+                        <button class="btn btn-primary-dark w-100">Сменить пароль</button>
+                    </form>
+                </div>
+            </div>
+            <% if(error) { %><div class="alert alert-danger mt-3"><%= error %></div><% } %>
+            <% if(success) { %><div class="alert alert-success mt-3"><%= success %></div><% } %>
+        </div>
+    </div>
+</div>
+<script>
+document.getElementById('passwordForm')?.addEventListener('submit', function(e) {
+    let newp = this.querySelector('[name="newPassword"]').value;
+    let conf = this.querySelector('[name="confirmPassword"]').value;
+    if(newp !== conf) { e.preventDefault(); alert('Пароли не совпадают'); }
+});
+</script>
+</body>
+</html>

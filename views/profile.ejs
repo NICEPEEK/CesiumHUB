@@ -1,0 +1,46 @@
+<%- include('header', { title: `Профиль ${profileUser.username}` }) %>
+<div class="row">
+    <div class="col-md-4 mb-4">
+        <div class="glass p-4 text-center">
+            <img src="/uploads/<%= profileUser.avatar %>" class="avatar-lg mb-3" onerror="this.src='/uploads/default.png'">
+            <h4 class="fw-bold"><%= profileUser.username %>
+                <% if(profileUser.is_verified) { %><i class="bi bi-patch-check-fill text-primary"></i><% } %>
+            </h4>
+            <div class="mt-3 p-2 bg-secondary bg-opacity-10 rounded-3">
+                <div class="d-flex justify-content-between small">
+                    <span>Репутация</span>
+                    <span class="<%= reputationLevel.class %>"><%= profileUser.reputation %> (<%= reputationLevel.text %>)</span>
+                </div>
+                <div class="progress mt-1"><div class="progress-bar" style="width: <%= Math.min(100, (profileUser.reputation+100)/2) %>%"></div></div>
+            </div>
+            <div class="row mt-3 g-2">
+                <div class="col-6"><div class="border rounded-3 p-2"><strong><%= posts.length %></strong><br><small>постов</small></div></div>
+                <div class="col-6"><div class="border rounded-3 p-2"><strong><%= posts.reduce((s,p)=>s+p.likes,0) %></strong><br><small>лайков</small></div></div>
+            </div>
+            <% if(user && user.id !== profileUser.id) { %>
+                <div class="mt-3 d-flex gap-2">
+                    <a href="/messages/chat/<%= profileUser.id %>" class="btn btn-primary-dark w-100">Написать</a>
+                    <button class="btn btn-outline-dark" onclick="reportUser(<%= profileUser.id %>)"><i class="bi bi-flag"></i></button>
+                </div>
+            <% } %>
+        </div>
+    </div>
+    <div class="col-md-8">
+        <h5 class="fw-bold mb-3">Посты <%= profileUser.username %></h5>
+        <% if(posts.length === 0) { %>
+            <div class="glass p-5 text-center"><i class="bi bi-folder2-open fs-1"></i><p>Нет постов</p></div>
+        <% } %>
+        <% posts.forEach(post => { %>
+        <div class="glass p-3 mb-3">
+            <a href="/post/<%= post.id %>" class="text-decoration-none fw-semibold" style="color:var(--text);"><%= post.title %></a>
+            <p class="small text-muted mt-1"><%= post.description.slice(0,120) %>…</p>
+            <div class="d-flex gap-3 small text-muted"><span><i class="bi bi-heart"></i> <%= post.likes %></span><span><i class="bi bi-chat"></i> <%= post.comments?.length %></span></div>
+        </div>
+        <% }) %>
+    </div>
+</div>
+<script>
+function reportUser(id) { let r=prompt('Причина жалобы:'); if(r) fetch(`/user/${id}/report`,{method:'POST',body:new URLSearchParams({reason:r})}).then(()=>alert('Жалоба отправлена')); }
+</script>
+</body>
+</html>

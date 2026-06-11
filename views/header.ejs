@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CesiumHUB</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --bg: #0a0c10;
+            --surface: rgba(22, 26, 32, 0.85);
+            --text: #eef2ff;
+            --text-muted: #9ca3af;
+            --border: rgba(255,255,255,0.05);
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+        }
+        body.light {
+            --bg: #f3f4f6;
+            --surface: rgba(255,255,255,0.75);
+            --text: #111827;
+            --text-muted: #6b7280;
+            --border: rgba(0,0,0,0.06);
+            --accent: #2563eb;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: var(--bg);
+            font-family: 'Inter', system-ui, sans-serif;
+            color: var(--text);
+            transition: all 0.2s;
+            padding-top: 90px; /* УВЕЛИЧИЛ ОТСТУП */
+        }
+        #fireflyCanvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 0;
+        }
+        .glass {
+            background: var(--surface);
+            backdrop-filter: blur(14px);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+        }
+        .navbar {
+            background: rgba(10, 12, 16, 0.85);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border);
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            width: 100%;
+            z-index: 1000;
+            padding: 12px 0;
+        }
+        body.light .navbar {
+            background: rgba(243, 244, 246, 0.85);
+        }
+        .navbar .container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        /* Логотип */
+        .navbar-brand {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            text-decoration: none;
+        }
+        .navbar-brand img {
+            height: 36px;
+            width: auto;
+            border-radius: 8px;
+        }
+        .navbar-brand span {
+            font-weight: 700;
+            font-size: 1.4rem;
+            background: linear-gradient(135deg, var(--accent), #60a5fa);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+        .nav-tabs-custom {
+            background: rgba(0,0,0,0.2);
+            border-radius: 40px;
+            padding: 4px;
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+        .nav-tabs-custom .nav-link {
+            border-radius: 40px;
+            padding: 8px 20px;
+            font-weight: 500;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            transition: 0.2s;
+            text-decoration: none;
+            white-space: nowrap;
+        }
+        .nav-tabs-custom .nav-link i { margin-right: 8px; }
+        .nav-tabs-custom .nav-link:hover,
+        .nav-tabs-custom .nav-link.active {
+            background: var(--accent);
+            color: white;
+            box-shadow: 0 2px 8px rgba(59,130,246,0.3);
+        }
+        .navbar-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .btn-icon {
+            background: transparent;
+            border: none;
+            font-size: 1.2rem;
+            color: var(--text-muted);
+            padding: 6px 10px;
+            border-radius: 30px;
+            transition: 0.2s;
+            cursor: pointer;
+        }
+        .btn-icon:hover {
+            background: rgba(59,130,246,0.2);
+            color: var(--accent);
+        }
+        .btn-primary-dark {
+            background: var(--accent);
+            border: none;
+            border-radius: 32px;
+            padding: 6px 18px;
+            font-weight: 500;
+            font-size: 0.85rem;
+            color: white;
+            cursor: pointer;
+        }
+        .btn-outline-dark {
+            background: transparent;
+            border: 1px solid var(--border);
+            border-radius: 32px;
+            padding: 6px 18px;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .btn-outline-dark:hover {
+            background: var(--accent);
+            color: white;
+            border-color: var(--accent);
+        }
+        .avatar-sm {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid var(--accent);
+        }
+        .dropdown-menu {
+            background: var(--surface);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+        }
+        .dropdown-item {
+            border-radius: 12px;
+            margin: 4px 8px;
+            color: var(--text);
+        }
+        .dropdown-item:hover {
+            background: rgba(59,130,246,0.2);
+        }
+        .avatar-md { width: 48px; height: 48px; border-radius: 50%; object-fit: cover; border: 2px solid var(--accent); }
+        .avatar-lg { width: 100px; height: 100px; border-radius: 50%; object-fit: cover; border: 3px solid var(--accent); }
+        .post-card { transition: 0.2s; margin-bottom: 24px; }
+        .post-card:hover { transform: translateY(-2px); background: rgba(59,130,246,0.05); }
+        .reaction-btn {
+            background: rgba(255,255,255,0.05);
+            border: none;
+            border-radius: 32px;
+            padding: 5px 16px;
+            font-weight: 500;
+            color: var(--text-muted);
+            cursor: pointer;
+        }
+        .reaction-btn:hover { background: var(--accent); color: white; }
+        .active-like { background: #10b98120; color: #10b981; border-left: 2px solid #10b981; }
+        .active-dislike { background: #f43f5e20; color: #f43f5e; border-left: 2px solid #f43f5e; }
+        .form-control {
+            background: rgba(0,0,0,0.3);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 10px 16px;
+            color: var(--text);
+        }
+        .form-control:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(59,130,246,0.2);
+            outline: none;
+        }
+        .progress { background: rgba(255,255,255,0.1); border-radius: 10px; height: 5px; }
+        .progress-bar { background: var(--accent); border-radius: 10px; }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: #1e1e2a; }
+        ::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 10px; }
+        @keyframes fade {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-in { animation: fade 0.25s ease; }
+        hr { border-color: var(--border); margin: 1rem 0; }
+        .text-accent { color: var(--accent); }
+        /* Дополнительный отступ для всех страниц */
+        .page-content {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+<canvas id="fireflyCanvas"></canvas>
+
+<nav class="navbar">
+    <div class="container">
+        <!-- ЛОГОТИП ВМЕСТО ТЕКСТА -->
+        <a class="navbar-brand" href="/">
+            <img src="/uploads/logo.png" alt="" onerror="this.onerror=null; this.parentElement.innerHTML='<span></span>'">
+            <span></span>
+        </a>
+        <div class="nav-tabs-custom">
+            <a class="nav-link <%= locals.title === 'Лента' ? 'active' : '' %>" href="/"><i class="bi bi-grid-3x3-gap-fill"></i> Лента</a>
+            <a class="nav-link <%= locals.title === 'Популярное' ? 'active' : '' %>" href="/popular"><i class="bi bi-graph-up"></i> Популярное</a>
+            <% if (user) { %>
+                <a class="nav-link" href="/user/<%= user.username %>"><i class="bi bi-person"></i> Профиль</a>
+                <a class="nav-link" href="/messages"><i class="bi bi-envelope"></i> Сообщения</a>
+                <a class="nav-link" href="/create"><i class="bi bi-pencil-square"></i> Создать</a>
+                <a class="nav-link" href="/settings"><i class="bi bi-gear"></i> Настройки</a>
+            <% } %>
+        </div>
+        <div class="navbar-right">
+            <button id="themeToggle" class="btn-icon"><i class="bi bi-moon-stars-fill"></i></button>
+            <% if (user) { %>
+                <% if (user.is_admin === 1) { %>
+                    <a href="/admin" class="btn-outline-dark" style="padding: 6px 14px;">Управление</a>
+                <% } %>
+                <div class="dropdown">
+                    <button class="btn-primary-dark dropdown-toggle d-flex align-items-center gap-2" data-bs-toggle="dropdown" style="border: none;">
+                        <img src="/uploads/<%= user.avatar %>" class="avatar-sm" style="width:28px;height:28px;" onerror="this.src='/uploads/default.png'">
+                        <%= user.username.length > 12 ? user.username.slice(0,10)+'..' : user.username %>
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                        <li><a class="dropdown-item" href="/user/<%= user.username %>"><i class="bi bi-person-circle"></i> Мой профиль</a></li>
+                        <li><a class="dropdown-item" href="/settings"><i class="bi bi-gear"></i> Настройки</a></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li><a class="dropdown-item text-danger" href="/logout"><i class="bi bi-box-arrow-right"></i> Выход</a></li>
+                    </ul>
+                </div>
+            <% } else { %>
+                <a href="/login" class="btn-outline-dark">Вход</a>
+                <a href="/register" class="btn-primary-dark">Регистрация</a>
+            <% } %>
+        </div>
+    </div>
+</nav>
+
+<div class="container page-content" style="position: relative; z-index: 2;">
+
+<script>
+    (function() {
+        const canvas = document.getElementById('fireflyCanvas');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        let w, h, particles = [];
+        function resize() { w = window.innerWidth; h = window.innerHeight; canvas.width = w; canvas.height = h; }
+        window.addEventListener('resize', resize);
+        resize();
+        for(let i = 0; i < 55; i++) {
+            particles.push({
+                x: Math.random() * w, y: Math.random() * h,
+                size: Math.random() * 3 + 1.5,
+                speedX: (Math.random() - 0.5) * 0.4,
+                speedY: (Math.random() - 0.5) * 0.3,
+                alpha: Math.random() * 0.5 + 0.2
+            });
+        }
+        function animate() {
+            ctx.clearRect(0, 0, w, h);
+            for(let p of particles) {
+                p.x += p.speedX; p.y += p.speedY;
+                if(p.x < 0) p.x = w;
+                if(p.x > w) p.x = 0;
+                if(p.y < 0) p.y = h;
+                if(p.y > h) p.y = 0;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(59, 130, 246, ${p.alpha})`;
+                ctx.fill();
+                ctx.shadowBlur = 12;
+                ctx.shadowColor = '#3b82f6';
+            }
+            requestAnimationFrame(animate);
+        }
+        animate();
+    })();
+
+    const toggle = document.getElementById('themeToggle');
+    if (toggle) {
+        const stored = localStorage.getItem('theme');
+        if(stored === 'light') {
+            document.body.classList.add('light');
+            toggle.innerHTML = '<i class="bi bi-sun-fill"></i>';
+        } else {
+            document.body.classList.remove('light');
+            toggle.innerHTML = '<i class="bi bi-moon-stars-fill"></i>';
+        }
+        toggle.addEventListener('click', () => {
+            document.body.classList.toggle('light');
+            if(document.body.classList.contains('light')) {
+                localStorage.setItem('theme', 'light');
+                toggle.innerHTML = '<i class="bi bi-sun-fill"></i>';
+            } else {
+                localStorage.setItem('theme', 'dark');
+                toggle.innerHTML = '<i class="bi bi-moon-stars-fill"></i>';
+            }
+        });
+    }
+</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
