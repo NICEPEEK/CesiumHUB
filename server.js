@@ -22,6 +22,23 @@ app.use(session({
     cookie: { maxAge: 30 * 24 * 60 * 60 * 1000 }
 }));
 
+// ========== MIDDLEWARE ДЛЯ ПРОВЕРКИ БАНА ==========
+app.use((req, res, next) => {
+    if (req.session.user && req.session.user.id) {
+        const user = db.prepare('SELECT is_banned, ban_reason FROM users WHERE id = ?').get(req.session.user.id);
+        if (user && user.is_banned === 1) {
+            req.session.destroy();
+            return res.status(403).render('error', { 
+                user: null, 
+                error: `Ваш аккаунт заблокирован. Причина: ${user.ban_reason || 'Нарушение правил'}`, 
+                code: 403, 
+                url: req.url 
+            });
+        }
+    }
+    next();
+});
+
 // ========== СОЗДАНИЕ ТАБЛИЦ ==========
 db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -76,6 +93,29 @@ db.exec(`
     CREATE TABLE IF NOT EXISTS ip_limits (
         ip TEXT PRIMARY KEY,
         account_count INTEGER DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    
+    CREATE TABLE IF NOT EXISTS post_limits (
+        user_id INTEGER PRIMARY KEY,
+        last_post_time DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    
+    CREATE TABLE IF NOT EXISTS reports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        reported_user_id INTEGER,
+        reporter_id INTEGER,
+        reason TEXT,
+        status TEXT DEFAULT 'pending',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    
+    CREATE TABLE IF NOT EXISTS post_reports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        post_id INTEGER,
+        reporter_id INTEGER,
+        reason TEXT,
+        status TEXT DEFAULT 'pending',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 `);
@@ -143,6 +183,10 @@ function getActiveUsersCount() {
     return db.prepare('SELECT COUNT(*) as count FROM users WHERE is_banned = 0').get().count;
 }
 
+function updateReputation(userId, delta) {
+    db.prepare('UPDATE users SET reputation = reputation + ? WHERE id = ?').run(delta, userId);
+}
+
 // ========== КАПЧА ==========
 app.get('/captcha', (req, res) => {
     const captcha = svgCaptcha.create({
@@ -156,6 +200,49 @@ app.get('/captcha', (req, res) => {
     req.session.captchaText = captcha.text;
     res.type('svg');
     res.send(captcha.data);
+});
+
+// ========== ПОИСК ПОЛЬЗОВАТЕЛЕЙ ПО @ ==========
+app.get('/search/users', (req, res) => {
+    const q = req.query.q || '';
+    if (!q.startsWith('@')) {
+        return res.json([]);
+    }
+    const searchTerm = q.substring(1);
+    const users = db.prepare('SELECT username, avatar, reputation FROM users WHERE username LIKE ? LIMIT 10')
+        .all(`%${searchTerm}%`);
+    res.json(users);
+});
+
+// ========== РЕПОРТЫ (ЖАЛОБЫ) ==========
+app.post('/user/:id/report', (req, res) => {
+    if (!req.session.user) return res.redirect('/login');
+    const reportedUserId = req.params.id;
+    const reporterId = req.session.user.id;
+    const reason = req.body.reason || 'Нарушение правил';
+    
+    if (reportedUserId == reporterId) {
+        return res.redirect(req.get('referer') || '/');
+    }
+    
+    const existing = db.prepare('SELECT * FROM reports WHERE reported_user_id = ? AND reporter_id = ? AND status = "pending"').get(reportedUserId, reporterId);
+    if (!existing) {
+        db.prepare('INSERT INTO reports (reported_user_id, reporter_id, reason) VALUES (?, ?, ?)').run(reportedUserId, reporterId, reason);
+    }
+    res.redirect(req.get('referer') || '/');
+});
+
+app.post('/post/:id/report', (req, res) => {
+    if (!req.session.user) return res.redirect('/login');
+    const postId = req.params.id;
+    const reporterId = req.session.user.id;
+    const reason = req.body.reason || 'Нарушение правил';
+    
+    const existing = db.prepare('SELECT * FROM post_reports WHERE post_id = ? AND reporter_id = ? AND status = "pending"').get(postId, reporterId);
+    if (!existing) {
+        db.prepare('INSERT INTO post_reports (post_id, reporter_id, reason) VALUES (?, ?, ?)').run(postId, reporterId, reason);
+    }
+    res.redirect(req.get('referer') || '/');
 });
 
 // ========== МАРШРУТЫ ==========
@@ -221,19 +308,49 @@ app.post('/post/:id/react', (req, res) => {
     const postId = req.params.id;
     const existing = db.prepare('SELECT type FROM reactions WHERE user_id = ? AND post_id = ?').get(userId, postId);
     
+    // Получаем автора поста для обновления репутации
+    const post = db.prepare('SELECT username FROM posts WHERE id = ?').get(postId);
+    const author = post ? db.prepare('SELECT id FROM users WHERE username = ?').get(post.username) : null;
+    const isSelf = author && author.id === userId;
+    
     if (existing) {
         if (existing.type === type) {
+            // Отмена реакции
             db.prepare('DELETE FROM reactions WHERE user_id = ? AND post_id = ?').run(userId, postId);
             db.prepare(`UPDATE posts SET ${type}s = ${type}s - 1 WHERE id = ?`).run(postId);
+            
+            // Отнимаем репутацию если это был лайк и не себе
+            if (type === 'like' && author && !isSelf) {
+                updateReputation(author.id, -1);
+            }
         } else {
-            db.prepare('UPDATE reactions SET type = ? WHERE user_id = ? AND post_id = ?').run(type, userId, postId);
+            // Смена реакции
             const opposite = type === 'like' ? 'dislike' : 'like';
+            db.prepare('UPDATE reactions SET type = ? WHERE user_id = ? AND post_id = ?').run(type, userId, postId);
             db.prepare(`UPDATE posts SET ${type}s = ${type}s + 1, ${opposite}s = ${opposite}s - 1 WHERE id = ?`).run(postId);
+            
+            // Обновляем репутацию при смене реакции
+            if (author && !isSelf) {
+                if (type === 'like') {
+                    updateReputation(author.id, 2); // +2 (компенсируем -1 и добавляем +1)
+                } else if (type === 'dislike') {
+                    updateReputation(author.id, -2); // -2
+                }
+            }
         }
     } else {
+        // Новая реакция
         db.prepare('INSERT INTO reactions (user_id, post_id, type) VALUES (?, ?, ?)').run(userId, postId, type);
         db.prepare(`UPDATE posts SET ${type}s = ${type}s + 1 WHERE id = ?`).run(postId);
+        
+        // Добавляем репутацию за лайк (не за свой)
+        if (type === 'like' && author && !isSelf) {
+            updateReputation(author.id, 1);
+        } else if (type === 'dislike' && author && !isSelf) {
+            updateReputation(author.id, -1);
+        }
     }
+    
     res.redirect(req.get('referer') || '/');
 });
 
@@ -310,14 +427,36 @@ app.get('/logout', (req, res) => { req.session.destroy(); res.redirect('/'); });
 
 app.get('/create', (req, res) => {
     if (!req.session.user) return res.redirect('/login');
-    res.render('create', { user: req.session.user, title: 'Создать пост' });
+    res.render('create', { user: req.session.user, title: 'Создать пост', error: null });
 });
 
 app.post('/create', upload.single('media'), (req, res) => {
     if (!req.session.user) return res.redirect('/login');
+    
+    // Проверка на 5 минут
+    const lastPost = db.prepare('SELECT last_post_time FROM post_limits WHERE user_id = ?').get(req.session.user.id);
+    if (lastPost) {
+        const lastTime = new Date(lastPost.last_post_time);
+        const now = new Date();
+        const diffMinutes = (now - lastTime) / 1000 / 60;
+        if (diffMinutes < 5) {
+            const waitMinutes = Math.ceil(5 - diffMinutes);
+            return res.render('create', { 
+                user: req.session.user, 
+                title: 'Создать пост', 
+                error: `Вы можете создать следующий пост через ${waitMinutes} минут(ы)`
+            });
+        }
+    }
+    
     const media = req.file ? req.file.filename : null;
     db.prepare('INSERT INTO posts (title, description, image, username) VALUES (?, ?, ?, ?)')
         .run(req.body.title, req.body.description, media, req.session.user.username);
+    
+    // Обновляем время последнего поста
+    db.prepare(`INSERT OR REPLACE INTO post_limits (user_id, last_post_time) VALUES (?, CURRENT_TIMESTAMP)`)
+        .run(req.session.user.id);
+    
     res.redirect('/');
 });
 
@@ -436,7 +575,38 @@ app.get('/admin', (req, res) => {
     const allUsers = db.prepare('SELECT * FROM users ORDER BY reputation DESC, created_at DESC').all();
     const allPosts = db.prepare('SELECT * FROM posts ORDER BY created_at DESC LIMIT 20').all();
     
-    res.render('admin', { user: req.session.user, stats, allUsers, allPosts, title: 'Админ-панель' });
+    const pendingUserReports = db.prepare(`
+        SELECT r.*, 
+               u.username as reported_username, 
+               rep.username as reporter_username
+        FROM reports r 
+        JOIN users u ON r.reported_user_id = u.id
+        JOIN users rep ON r.reporter_id = rep.id
+        WHERE r.status = 'pending'
+        ORDER BY r.created_at DESC
+    `).all();
+    
+    const pendingPostReports = db.prepare(`
+        SELECT pr.*, 
+               p.title as post_title, 
+               p.username as post_author,
+               rep.username as reporter_username
+        FROM post_reports pr 
+        JOIN posts p ON pr.post_id = p.id
+        JOIN users rep ON pr.reporter_id = rep.id
+        WHERE pr.status = 'pending'
+        ORDER BY pr.created_at DESC
+    `).all();
+    
+    res.render('admin', { 
+        user: req.session.user, 
+        stats, 
+        allUsers, 
+        allPosts, 
+        pendingUserReports,
+        pendingPostReports,
+        title: 'Админ-панель' 
+    });
 });
 
 app.post('/admin/user/:id/verify', (req, res) => {
@@ -446,7 +616,7 @@ app.post('/admin/user/:id/verify', (req, res) => {
         const newStatus = user.is_verified === 1 ? 0 : 1;
         db.prepare('UPDATE users SET is_verified = ? WHERE id = ?').run(newStatus, req.params.id);
         if (newStatus === 1) {
-            db.prepare('UPDATE users SET reputation = reputation + 20 WHERE id = ?').run(req.params.id);
+            updateReputation(req.params.id, 20);
         }
     }
     res.redirect('/admin');
@@ -461,8 +631,12 @@ app.post('/admin/user/:id/ban', (req, res) => {
 
 app.post('/admin/user/:id/unban', (req, res) => {
     if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
-    db.prepare('UPDATE users SET is_banned = 0, ban_reason = "" WHERE id = ?').run(req.params.id);
-    res.redirect('/admin');
+    try {
+        db.prepare('UPDATE users SET is_banned = 0, ban_reason = "" WHERE id = ?').run(req.params.id);
+        res.redirect('/admin');
+    } catch(e) {
+        res.status(500).send('Ошибка при разбане');
+    }
 });
 
 app.post('/admin/user/:id/makeadmin', (req, res) => {
@@ -480,7 +654,7 @@ app.post('/admin/user/:id/removeadmin', (req, res) => {
 app.post('/admin/user/:id/addreputation', (req, res) => {
     if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
     const amount = parseInt(req.body.amount) || 0;
-    db.prepare('UPDATE users SET reputation = reputation + ? WHERE id = ?').run(amount, req.params.id);
+    updateReputation(req.params.id, amount);
     res.redirect('/admin');
 });
 
@@ -489,6 +663,18 @@ app.post('/admin/post/:id/delete', (req, res) => {
     db.prepare('DELETE FROM comments WHERE post_id = ?').run(req.params.id);
     db.prepare('DELETE FROM reactions WHERE post_id = ?').run(req.params.id);
     db.prepare('DELETE FROM posts WHERE id = ?').run(req.params.id);
+    res.redirect('/admin');
+});
+
+app.post('/admin/report/:id/resolve', (req, res) => {
+    if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
+    db.prepare('UPDATE reports SET status = "resolved" WHERE id = ?').run(req.params.id);
+    res.redirect('/admin');
+});
+
+app.post('/admin/post-report/:id/resolve', (req, res) => {
+    if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
+    db.prepare('UPDATE post_reports SET status = "resolved" WHERE id = ?').run(req.params.id);
     res.redirect('/admin');
 });
 
