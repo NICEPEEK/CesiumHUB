@@ -8,7 +8,7 @@ const fs = require('fs');
 
 const app = express();
 
-// Подключение к PostgreSQL (Railway даст переменную DATABASE_URL)
+// Подключение к PostgreSQL
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: false }
@@ -23,6 +23,16 @@ app.use(session({
     saveUninitialized: false,
     cookie: { maxAge: 30 * 24 * 60 * 60 * 1000 }
 }));
+
+// ========== ФУНКЦИЯ ДЛЯ РЕПУТАЦИИ ==========
+function getReputationLevel(reputation) {
+    if (reputation >= 100) return { class: 'reputation-positive', text: 'Легенда' };
+    if (reputation >= 50) return { class: 'reputation-positive', text: 'Звезда' };
+    if (reputation >= 20) return { class: 'reputation-positive', text: 'Хорошая' };
+    if (reputation >= 0) return { class: 'reputation-neutral', text: 'Нейтральная' };
+    if (reputation >= -20) return { class: 'reputation-negative', text: 'Сомнительная' };
+    return { class: 'reputation-negative', text: 'Плохая' };
+}
 
 // ========== СОЗДАНИЕ ТАБЛИЦ ==========
 async function initDB() {
@@ -110,15 +120,6 @@ async function getAuthorInfo(username) {
     return result.rows[0] || { username, avatar: 'default.png', is_verified: 0, is_banned: 0, reputation: 0 };
 }
 
-function getReputationLevel(reputation) {
-    if (reputation >= 100) return { class: 'reputation-positive', text: 'Легенда' };
-    if (reputation >= 50) return { class: 'reputation-positive', text: 'Звезда' };
-    if (reputation >= 20) return { class: 'reputation-positive', text: 'Хорошая' };
-    if (reputation >= 0) return { class: 'reputation-neutral', text: 'Нейтральная' };
-    if (reputation >= -20) return { class: 'reputation-negative', text: 'Сомнительная' };
-    return { class: 'reputation-negative', text: 'Плохая' };
-}
-
 async function getUserReaction(userId, postId) {
     if (!userId) return null;
     const result = await pool.query('SELECT type FROM reactions WHERE user_id = $1 AND post_id = $2', [userId, postId]);
@@ -172,9 +173,14 @@ app.get('/search', async (req, res) => {
         [`%${q}%`],
         req.session.user?.id
     );
-    res.render('index', { posts, user: req.session.user, title: `Поиск: ${q}` });
+    const stats = {
+        totalUsers: (await pool.query('SELECT COUNT(*) as count FROM users')).rows[0].count,
+        totalPosts: (await pool.query('SELECT COUNT(*) as count FROM posts')).rows[0].count,
+        totalComments: (await pool.query('SELECT COUNT(*) as count FROM comments')).rows[0].count
+    };
+    const topUsers = (await pool.query('SELECT username, reputation FROM users ORDER BY reputation DESC LIMIT 5')).rows;
+    res.render('index', { posts, user: req.session.user, title: `Поиск: ${q}`, stats, topUsers });
 });
-
 
 app.get('/user/:username', async (req, res) => {
     const profileUser = (await pool.query('SELECT * FROM users WHERE username = $1', [req.params.username])).rows[0];
@@ -188,7 +194,13 @@ app.get('/post/:id', async (req, res) => {
     await incrementViews(req.params.id);
     const posts = await getPostsWithDetails('SELECT * FROM posts WHERE id = $1', [req.params.id], req.session.user?.id);
     if (posts.length === 0) return res.status(404).render('error', { user: req.session.user, error: 'Пост не найден', code: 404, url: req.url });
-    res.render('index', { posts, user: req.session.user, title: posts[0].title });
+    const stats = {
+        totalUsers: (await pool.query('SELECT COUNT(*) as count FROM users')).rows[0].count,
+        totalPosts: (await pool.query('SELECT COUNT(*) as count FROM posts')).rows[0].count,
+        totalComments: (await pool.query('SELECT COUNT(*) as count FROM comments')).rows[0].count
+    };
+    const topUsers = (await pool.query('SELECT username, reputation FROM users ORDER BY reputation DESC LIMIT 5')).rows;
+    res.render('index', { posts, user: req.session.user, title: posts[0].title, stats, topUsers });
 });
 
 app.post('/post/:id/react', async (req, res) => {

@@ -20,7 +20,7 @@
             --bg: #f3f4f6;
             --surface: rgba(255,255,255,0.75);
             --text: #111827;
-            --text-muted: #6b7280;
+            --text-muted: #4b5563;
             --border: rgba(0,0,0,0.06);
             --accent: #2563eb;
         }
@@ -30,7 +30,7 @@
             font-family: 'Inter', system-ui, sans-serif;
             color: var(--text);
             transition: all 0.2s;
-            padding-top: 90px; /* УВЕЛИЧИЛ ОТСТУП */
+            padding-top: 90px;
         }
         #fireflyCanvas {
             position: fixed;
@@ -48,7 +48,7 @@
             border-radius: 24px;
         }
         .navbar {
-            background: rgba(10, 12, 16, 0.85);
+            background: rgba(10,12,16,0.85);
             backdrop-filter: blur(20px);
             border-bottom: 1px solid var(--border);
             position: fixed;
@@ -60,7 +60,7 @@
             padding: 12px 0;
         }
         body.light .navbar {
-            background: rgba(243, 244, 246, 0.85);
+            background: rgba(241,245,249,0.85);
         }
         .navbar .container {
             display: flex;
@@ -69,21 +69,13 @@
             flex-wrap: wrap;
             gap: 12px;
         }
-        /* Логотип */
         .navbar-brand {
             display: flex;
             align-items: center;
             gap: 8px;
             text-decoration: none;
-        }
-        .navbar-brand img {
-            height: 36px;
-            width: auto;
-            border-radius: 8px;
-        }
-        .navbar-brand span {
             font-weight: 700;
-            font-size: 1.4rem;
+            font-size: 1.5rem;
             background: linear-gradient(135deg, var(--accent), #60a5fa);
             -webkit-background-clip: text;
             background-clip: text;
@@ -158,31 +150,11 @@
             color: white;
             border-color: var(--accent);
         }
-        .avatar-sm {
-            width: 32px;
-            height: 32px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--accent);
-        }
-        .dropdown-menu {
-            background: var(--surface);
-            backdrop-filter: blur(20px);
-            border: 1px solid var(--border);
-            border-radius: 20px;
-        }
-        .dropdown-item {
-            border-radius: 12px;
-            margin: 4px 8px;
-            color: var(--text);
-        }
-        .dropdown-item:hover {
-            background: rgba(59,130,246,0.2);
-        }
+        .avatar-sm { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; border: 2px solid var(--accent); }
         .avatar-md { width: 48px; height: 48px; border-radius: 50%; object-fit: cover; border: 2px solid var(--accent); }
         .avatar-lg { width: 100px; height: 100px; border-radius: 50%; object-fit: cover; border: 3px solid var(--accent); }
         .post-card { transition: 0.2s; margin-bottom: 24px; }
-        .post-card:hover { transform: translateY(-2px); background: rgba(59,130,246,0.05); }
+        .post-card:hover { transform: translateY(-2px); background: rgba(59,130,246,0.08); border-color: var(--accent); }
         .reaction-btn {
             background: rgba(255,255,255,0.05);
             border: none;
@@ -219,9 +191,21 @@
         .animate-in { animation: fade 0.25s ease; }
         hr { border-color: var(--border); margin: 1rem 0; }
         .text-accent { color: var(--accent); }
-        /* Дополнительный отступ для всех страниц */
-        .page-content {
-            margin-top: 20px;
+        
+        /* Яркие цвета для текста */
+        .text-muted, .text-secondary {
+            color: #cbd5e1 !important;
+        }
+        body.light .text-muted,
+        body.light .text-secondary {
+            color: #4b5563 !important;
+        }
+        .text-white, .text-light {
+            color: #ffffff !important;
+        }
+        body.light .text-white,
+        body.light .text-light {
+            color: #1a202c !important;
         }
     </style>
 </head>
@@ -230,11 +214,7 @@
 
 <nav class="navbar">
     <div class="container">
-        <!-- ЛОГОТИП ВМЕСТО ТЕКСТА -->
-        <a class="navbar-brand" href="/">
-            <img src="/uploads/logo.png" alt="" onerror="this.onerror=null; this.parentElement.innerHTML='<span></span>'">
-            <span></span>
-        </a>
+        <a class="navbar-brand" href="/">CesiumHUB</a>
         <div class="nav-tabs-custom">
             <a class="nav-link <%= locals.title === 'Лента' ? 'active' : '' %>" href="/"><i class="bi bi-grid-3x3-gap-fill"></i> Лента</a>
             <a class="nav-link <%= locals.title === 'Популярное' ? 'active' : '' %>" href="/popular"><i class="bi bi-graph-up"></i> Популярное</a>
@@ -271,7 +251,7 @@
     </div>
 </nav>
 
-<div class="container page-content" style="position: relative; z-index: 2;">
+<div class="container" style="position: relative; z-index: 2;">
 
 <script>
     (function() {
