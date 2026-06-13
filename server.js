@@ -90,6 +90,13 @@ async function initDB() {
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     `);
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS ip_limits (
+            ip TEXT PRIMARY KEY,
+            account_count INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
 
     // Создаём админа NICEPEEK если нет
     const adminCheck = await pool.query('SELECT * FROM users WHERE username = $1', ['NICEPEEK']);
@@ -247,8 +254,26 @@ app.post('/post/:id/delete', async (req, res) => {
 app.get('/register', (req, res) => res.render('register', { user: req.session.user, error: null, title: 'Регистрация' }));
 app.post('/register', async (req, res) => {
     try {
+        // Получаем IP пользователя
+        const userIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+        
+        // Проверяем сколько аккаунтов уже зарегистрировано с этого IP
+        const ipCheck = await pool.query('SELECT account_count FROM ip_limits WHERE ip = $1', [userIp]);
+        
+        if (ipCheck.rows.length > 0 && ipCheck.rows[0].account_count >= 2) {
+            return res.render('register', { user: req.session.user, error: 'С одного IP нельзя зарегистрировать более 2 аккаунтов', title: 'Регистрация' });
+        }
+        
         const hashed = bcrypt.hashSync(req.body.password, 10);
         await pool.query('INSERT INTO users (username, password, reputation) VALUES ($1, $2, $3)', [req.body.username, hashed, 0]);
+        
+        // Обновляем счётчик IP
+        if (ipCheck.rows.length > 0) {
+            await pool.query('UPDATE ip_limits SET account_count = account_count + 1 WHERE ip = $1', [userIp]);
+        } else {
+            await pool.query('INSERT INTO ip_limits (ip, account_count) VALUES ($1, $2)', [userIp, 1]);
+        }
+        
         res.redirect('/login');
     } catch(e) {
         res.render('register', { user: req.session.user, error: 'Ник уже занят', title: 'Регистрация' });
@@ -378,6 +403,79 @@ app.post('/messages/send/:userId', async (req, res) => {
         await pool.query('INSERT INTO messages (from_user_id, to_user_id, message) VALUES ($1, $2, $3)', [req.session.user.id, req.params.userId, req.body.message.trim()]);
     }
     res.redirect(`/messages/chat/${req.params.userId}`);
+});
+
+// ========== АДМИН-ПАНЕЛЬ ==========
+app.get('/admin', async (req, res) => {
+    if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/');
+    
+    const stats = {
+        totalUsers: (await pool.query('SELECT COUNT(*) as count FROM users')).rows[0].count,
+        totalPosts: (await pool.query('SELECT COUNT(*) as count FROM posts')).rows[0].count,
+        totalComments: (await pool.query('SELECT COUNT(*) as count FROM comments')).rows[0].count,
+        totalMessages: (await pool.query('SELECT COUNT(*) as count FROM messages')).rows[0].count
+    };
+    const allUsers = (await pool.query('SELECT * FROM users ORDER BY reputation DESC, created_at DESC')).rows;
+    const allPosts = (await pool.query('SELECT * FROM posts ORDER BY created_at DESC LIMIT 20')).rows;
+    
+    res.render('admin', { user: req.session.user, stats, allUsers, allPosts, title: 'Админ-панель' });
+});
+
+// Выдать/забрать верификацию
+app.post('/admin/user/:id/verify', async (req, res) => {
+    if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
+    const user = (await pool.query('SELECT is_verified FROM users WHERE id = $1', [req.params.id])).rows[0];
+    if (user) {
+        const newStatus = user.is_verified === 1 ? 0 : 1;
+        await pool.query('UPDATE users SET is_verified = $1 WHERE id = $2', [newStatus, req.params.id]);
+    }
+    res.redirect('/admin');
+});
+
+// Забанить пользователя
+app.post('/admin/user/:id/ban', async (req, res) => {
+    if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
+    const reason = req.body.reason || 'Нарушение правил';
+    await pool.query('UPDATE users SET is_banned = 1, ban_reason = $1 WHERE id = $2', [reason, req.params.id]);
+    res.redirect('/admin');
+});
+
+// Разбанить пользователя
+app.post('/admin/user/:id/unban', async (req, res) => {
+    if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
+    await pool.query('UPDATE users SET is_banned = 0, ban_reason = "" WHERE id = $1', [req.params.id]);
+    res.redirect('/admin');
+});
+
+// Сделать администратором
+app.post('/admin/user/:id/makeadmin', async (req, res) => {
+    if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
+    await pool.query('UPDATE users SET is_admin = 1 WHERE id = $1', [req.params.id]);
+    res.redirect('/admin');
+});
+
+// Снять администратора
+app.post('/admin/user/:id/removeadmin', async (req, res) => {
+    if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
+    await pool.query('UPDATE users SET is_admin = 0 WHERE id = $1', [req.params.id]);
+    res.redirect('/admin');
+});
+
+// Добавить репутацию
+app.post('/admin/user/:id/addreputation', async (req, res) => {
+    if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
+    const amount = parseInt(req.body.amount) || 0;
+    await pool.query('UPDATE users SET reputation = reputation + $1 WHERE id = $2', [amount, req.params.id]);
+    res.redirect('/admin');
+});
+
+// Удалить пост через админку
+app.post('/admin/post/:id/delete', async (req, res) => {
+    if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
+    await pool.query('DELETE FROM comments WHERE post_id = $1', [req.params.id]);
+    await pool.query('DELETE FROM reactions WHERE post_id = $1', [req.params.id]);
+    await pool.query('DELETE FROM posts WHERE id = $1', [req.params.id]);
+    res.redirect('/admin');
 });
 
 const PORT = process.env.PORT || 3000;

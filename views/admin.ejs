@@ -1,64 +1,99 @@
-<%- include('header') %>
-<div class="row animate-in">
+<%- include('header', { title: 'Админ-панель' }) %>
+<div class="row">
     <div class="col-12">
-        <h2 class="gradient-text mb-4"><i class="bi bi-shield-lock-fill"></i> Админ-панель</h2>
+        <h4 class="fw-bold mb-3">Панель управления</h4>
         
         <!-- Статистика -->
         <div class="row mb-4">
-            <div class="col-md-2 mb-3"><div class="glass-panel p-3 text-center"><i class="bi bi-people-fill" style="font-size: 1.5rem; color: var(--cyan);"></i><h4 class="text-white mb-0"><%= stats.totalUsers %></h4><small>Пользователей</small></div></div>
-            <div class="col-md-2 mb-3"><div class="glass-panel p-3 text-center"><i class="bi bi-file-post-fill" style="font-size: 1.5rem; color: var(--cyan);"></i><h4 class="text-white mb-0"><%= stats.totalPosts %></h4><small>Постов</small></div></div>
-            <div class="col-md-2 mb-3"><div class="glass-panel p-3 text-center"><i class="bi bi-chat-dots-fill" style="font-size: 1.5rem; color: var(--cyan);"></i><h4 class="text-white mb-0"><%= stats.totalComments %></h4><small>Комментов</small></div></div>
-            <div class="col-md-2 mb-3"><div class="glass-panel p-3 text-center"><i class="bi bi-flag-fill" style="font-size: 1.5rem; color: var(--cyan);"></i><h4 class="text-white mb-0"><%= stats.totalReports %></h4><small>Жалоб</small></div></div>
-            <div class="col-md-2 mb-3"><div class="glass-panel p-3 text-center"><i class="bi bi-envelope-fill" style="font-size: 1.5rem; color: var(--cyan);"></i><h4 class="text-white mb-0"><%= stats.totalMessages %></h4><small>Сообщений</small></div></div>
-        </div>
-        
-        <!-- Жалобы -->
-        <% if (pendingReports.length > 0) { %>
-        <div class="glass-panel p-4 mb-4">
-            <h4 class="text-warning mb-3"><i class="bi bi-flag-fill"></i> Жалобы на пользователей</h4>
-            <% pendingReports.forEach(report => { %>
-            <div class="bg-dark bg-opacity-50 p-3 rounded mb-3">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <strong>👤 <%= report.reported_username %></strong> (репутация: <%= report.reported_reputation %>)<br>
-                        <strong>Жалоба от:</strong> <%= report.reporter_username %><br>
-                        <strong>Причина:</strong> <%= report.reason %>
-                    </div>
-                    <form action="/admin/report/<%= report.id %>/resolve" method="POST">
-                        <button class="btn btn-cyber btn-sm">✅ Рассмотрено</button>
-                    </form>
+            <div class="col-md-3 mb-2">
+                <div class="glass p-3 text-center">
+                    <i class="bi bi-people-fill fs-2"></i>
+                    <h5 class="mb-0"><%= stats.totalUsers %></h5>
+                    <small>Пользователей</small>
                 </div>
             </div>
-            <% }) %>
+            <div class="col-md-3 mb-2">
+                <div class="glass p-3 text-center">
+                    <i class="bi bi-file-post-fill fs-2"></i>
+                    <h5 class="mb-0"><%= stats.totalPosts %></h5>
+                    <small>Постов</small>
+                </div>
+            </div>
+            <div class="col-md-3 mb-2">
+                <div class="glass p-3 text-center">
+                    <i class="bi bi-chat-dots-fill fs-2"></i>
+                    <h5 class="mb-0"><%= stats.totalComments %></h5>
+                    <small>Комментариев</small>
+                </div>
+            </div>
+            <div class="col-md-3 mb-2">
+                <div class="glass p-3 text-center">
+                    <i class="bi bi-envelope-fill fs-2"></i>
+                    <h5 class="mb-0"><%= stats.totalMessages %></h5>
+                    <small>Сообщений</small>
+                </div>
+            </div>
         </div>
-        <% } %>
         
         <!-- Пользователи -->
-        <div class="glass-panel p-4 mb-4">
-            <h4 class="mb-3"><i class="bi bi-people-fill"></i> Пользователи</h4>
+        <div class="glass p-4 mb-4">
+            <h5 class="fw-bold mb-3">Пользователи</h5>
             <div class="table-responsive">
                 <table class="table table-dark table-hover">
-                    <thead><tr><th>ID</th><th>Пользователь</th><th>Репутация</th><th>Роль</th><th>Действия</th></tr></thead>
+                    <thead>
+                        <tr><th>ID</th><th>Ник</th><th>Репутация</th><th>Статус</th><th>Действия</th></tr>
+                    </thead>
                     <tbody>
                         <% allUsers.forEach(u => { %>
                         <tr>
                             <td><%= u.id %></td>
-                            <td><img src="/uploads/<%= u.avatar %>" class="avatar-sm me-2"><%= u.username %><% if (u.is_verified === 1) { %> ✅<% } %></td>
+                            <td><img src="/uploads/<%= u.avatar %>" class="avatar-sm me-2"><%= u.username %><% if(u.is_verified) { %> ✅<% } %></td>
                             <td class="<%= u.reputation >= 0 ? 'text-success' : 'text-danger' %>"><%= u.reputation %></td>
-                            <td><% if (u.is_admin === 1) { %><span class="badge bg-danger">Админ</span><% } else { %><span class="badge bg-secondary">Юзер</span><% } %><% if (u.is_banned === 1) { %> <span class="badge bg-dark">Забанен</span><% } %></td>
+                            <td>
+                                <% if(u.is_admin) { %><span class="badge bg-danger">Админ</span><% } %>
+                                <% if(u.is_banned) { %><span class="badge bg-dark">Бан</span><% } %>
+                             </td>
                             <td>
                                 <div class="btn-group btn-group-sm">
-                                    <form action="/admin/user/<%= u.id %>/verify" method="POST" class="d-inline"><button class="btn btn-outline-info" title="Верификация">✅</button></form>
-                                    <% if (u.is_banned === 1) { %>
-                                        <form action="/admin/user/<%= u.id %>/unban" method="POST" class="d-inline"><button class="btn btn-outline-success">🔓</button></form>
+                                    <form action="/admin/user/<%= u.id %>/verify" method="POST"><button class="btn btn-outline-info" title="Верификация">✅</button></form>
+                                    <% if(u.is_banned) { %>
+                                        <form action="/admin/user/<%= u.id %>/unban" method="POST"><button class="btn btn-outline-success" title="Разбан">🔓</button></form>
                                     <% } else { %>
-                                        <button class="btn btn-outline-danger" onclick="banUser(<%= u.id %>, '<%= u.username %>')">🔨</button>
+                                        <button class="btn btn-outline-danger" onclick="banUser(<%= u.id %>, '<%= u.username %>')" title="Бан">🔨</button>
+                                    <% } %>
+                                    <% if(!u.is_admin && u.username !== 'NICEPEEK') { %>
+                                        <form action="/admin/user/<%= u.id %>/makeadmin" method="POST"><button class="btn btn-outline-warning" title="Сделать админом">👑</button></form>
                                     <% } %>
                                     <form action="/admin/user/<%= u.id %>/addreputation" method="POST" class="d-inline">
-                                        <input type="number" name="amount" placeholder="±" style="width: 50px;" class="form-control form-control-sm d-inline">
-                                        <button class="btn btn-outline-warning">🎯</button>
+                                        <input type="number" name="amount" placeholder="±" style="width:60px;" class="form-control form-control-sm d-inline">
+                                        <button class="btn btn-outline-primary" title="Изменить репутацию">⭐</button>
                                     </form>
                                 </div>
+                             </td>
+                        </tr>
+                        <% }) %>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Посты -->
+        <div class="glass p-4">
+            <h5 class="fw-bold mb-3">Последние посты</h5>
+            <div class="table-responsive">
+                <table class="table table-dark table-hover">
+                    <thead><tr><th>ID</th><th>Заголовок</th><th>Автор</th><th>Лайки</th><th></th></tr></thead>
+                    <tbody>
+                        <% allPosts.forEach(p => { %>
+                        <tr>
+                            <td><%= p.id %></td>
+                            <td><%= p.title %></td>
+                            <td><%= p.username %></td>
+                            <td>👍 <%= p.likes %></td>
+                            <td>
+                                <form action="/admin/post/<%= p.id %>/delete" method="POST" onsubmit="return confirm('Удалить пост?')">
+                                    <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+                                </form>
                             </td>
                         </tr>
                         <% }) %>
@@ -72,7 +107,7 @@
 <script>
 function banUser(userId, username) {
     let reason = prompt(`Причина бана для ${username}:`, "Нарушение правил");
-    if (reason) {
+    if(reason) {
         let form = document.createElement('form');
         form.method = 'POST';
         form.action = `/admin/user/${userId}/ban`;
@@ -86,4 +121,5 @@ function banUser(userId, username) {
     }
 }
 </script>
-</div></body></html>
+</body>
+</html>

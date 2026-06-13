@@ -214,7 +214,9 @@
 
 <nav class="navbar">
     <div class="container">
-        <a class="navbar-brand" href="/">CesiumHUB</a>
+<a class="navbar-brand" href="/">
+    <img src="/uploads/logo.png" alt="Logo" style="height: 40px;" onerror="this.onerror=null; this.parentElement.innerHTML='CesiumHUB'">
+</a>
         <div class="nav-tabs-custom">
             <a class="nav-link <%= locals.title === 'Лента' ? 'active' : '' %>" href="/"><i class="bi bi-grid-3x3-gap-fill"></i> Лента</a>
             <a class="nav-link <%= locals.title === 'Популярное' ? 'active' : '' %>" href="/popular"><i class="bi bi-graph-up"></i> Популярное</a>
