@@ -6,79 +6,112 @@ const path = require('path');
 const fs = require('fs');
 const svgCaptcha = require('svg-captcha');
 const { createClient } = require('@supabase/supabase-js');
-const WebSocket = require('ws');
 
 const app = express();
 
-// Supabase клиент с правильной настройкой WebSocket
+// Supabase клиент
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey, {
-    realtime: {
-        webSocketImpl: WebSocket,
-        transport: WebSocket
-    }
-});
-// ========== СОЗДАНИЕ ТАБЛИЦ В SUPABASE ==========
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+app.set('view engine', 'ejs');
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static('public'));
+app.use(session({
+    secret: 'cesium-gdps-secret-key',
+    resave: false,
+    saveUninitialized: false,
+    cookie: { maxAge: 30 * 24 * 60 * 60 * 1000 }
+}));
+
+// ========== СОЗДАНИЕ ТАБЛИЦ ЧЕРЕЗ REST API ==========
 async function initDB() {
-    // SQL запросы для создания таблиц
-    const sqlQueries = [
-        `CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            username TEXT UNIQUE,
-            password TEXT,
-            avatar TEXT DEFAULT 'default.png',
-            is_admin INTEGER DEFAULT 0,
-            is_verified INTEGER DEFAULT 0,
-            is_banned INTEGER DEFAULT 0,
-            ban_reason TEXT DEFAULT '',
-            reputation INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )`,
-        `CREATE TABLE IF NOT EXISTS posts (
-            id SERIAL PRIMARY KEY,
-            title TEXT,
-            description TEXT,
-            image TEXT,
-            username TEXT,
-            likes INTEGER DEFAULT 0,
-            dislikes INTEGER DEFAULT 0,
-            views INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )`,
-        `CREATE TABLE IF NOT EXISTS comments (
-            id SERIAL PRIMARY KEY,
-            post_id INTEGER,
-            username TEXT,
-            text TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )`,
-        `CREATE TABLE IF NOT EXISTS reactions (
-            user_id INTEGER,
-            post_id INTEGER,
-            type TEXT CHECK(type IN ('like', 'dislike')),
-            PRIMARY KEY (user_id, post_id)
-        )`,
-        `CREATE TABLE IF NOT EXISTS messages (
-            id SERIAL PRIMARY KEY,
-            from_user_id INTEGER,
-            to_user_id INTEGER,
-            message TEXT,
-            is_read INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )`,
-        `CREATE TABLE IF NOT EXISTS ip_limits (
-            ip TEXT PRIMARY KEY,
-            account_count INTEGER DEFAULT 1,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )`
-    ];
+    // Создаём таблицу users
+    await supabase.from('users').select('id').limit(1).catch(async () => {
+        await supabase.rpc('exec_sql', { query: `
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username TEXT UNIQUE,
+                password TEXT,
+                avatar TEXT DEFAULT 'default.png',
+                is_admin INTEGER DEFAULT 0,
+                is_verified INTEGER DEFAULT 0,
+                is_banned INTEGER DEFAULT 0,
+                ban_reason TEXT DEFAULT '',
+                reputation INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ` }).catch(e => console.log('Users table error:', e.message));
+    });
 
-    for (const sql of sqlQueries) {
-        await supabase.rpc('exec_sql', { query: sql }).catch(e => console.log('Table already exists'));
-    }
+    // Создаём таблицу posts
+    await supabase.from('posts').select('id').limit(1).catch(async () => {
+        await supabase.rpc('exec_sql', { query: `
+            CREATE TABLE IF NOT EXISTS posts (
+                id SERIAL PRIMARY KEY,
+                title TEXT,
+                description TEXT,
+                image TEXT,
+                username TEXT,
+                likes INTEGER DEFAULT 0,
+                dislikes INTEGER DEFAULT 0,
+                views INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ` }).catch(e => console.log('Posts table error:', e.message));
+    });
 
-    // Создаём админа NICEPEEK если нет
+    // Создаём таблицу comments
+    await supabase.from('comments').select('id').limit(1).catch(async () => {
+        await supabase.rpc('exec_sql', { query: `
+            CREATE TABLE IF NOT EXISTS comments (
+                id SERIAL PRIMARY KEY,
+                post_id INTEGER,
+                username TEXT,
+                text TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ` }).catch(e => console.log('Comments table error:', e.message));
+    });
+
+    // Создаём таблицу reactions
+    await supabase.from('reactions').select('user_id').limit(1).catch(async () => {
+        await supabase.rpc('exec_sql', { query: `
+            CREATE TABLE IF NOT EXISTS reactions (
+                user_id INTEGER,
+                post_id INTEGER,
+                type TEXT CHECK(type IN ('like', 'dislike')),
+                PRIMARY KEY (user_id, post_id)
+            )
+        ` }).catch(e => console.log('Reactions table error:', e.message));
+    });
+
+    // Создаём таблицу messages
+    await supabase.from('messages').select('id').limit(1).catch(async () => {
+        await supabase.rpc('exec_sql', { query: `
+            CREATE TABLE IF NOT EXISTS messages (
+                id SERIAL PRIMARY KEY,
+                from_user_id INTEGER,
+                to_user_id INTEGER,
+                message TEXT,
+                is_read INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ` }).catch(e => console.log('Messages table error:', e.message));
+    });
+
+    // Создаём таблицу ip_limits
+    await supabase.from('ip_limits').select('ip').limit(1).catch(async () => {
+        await supabase.rpc('exec_sql', { query: `
+            CREATE TABLE IF NOT EXISTS ip_limits (
+                ip TEXT PRIMARY KEY,
+                account_count INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ` }).catch(e => console.log('Ip_limits table error:', e.message));
+    });
+
+    // Создаём админа NICEPEEK
     const { data: adminCheck } = await supabase
         .from('users')
         .select('*')
@@ -92,11 +125,14 @@ async function initDB() {
             .insert({ username: 'NICEPEEK', password: hashedPassword, is_admin: 1, is_verified: 1, reputation: 100 });
         console.log('Администратор NICEPEEK создан');
     }
+    
     console.log('База данных готова');
 }
-initDB();
 
-// ========== НАСТРОЙКА ЗАГРУЗКИ (временная папка) ==========
+// Запускаем инициализацию
+initDB().catch(console.error);
+
+// ========== НАСТРОЙКА ЗАГРУЗКИ ==========
 const tempDir = './temp';
 if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 const storage = multer.diskStorage({
@@ -136,11 +172,33 @@ async function getUserReaction(userId, postId) {
 }
 
 async function getPostsWithDetails(query, params = [], userId = null) {
-    // Упрощённая версия для Supabase
-    const { data: posts } = await supabase
-        .from('posts')
-        .select('*')
-        .order('created_at', { ascending: false });
+    let posts;
+    if (query === 'SELECT * FROM posts ORDER BY created_at DESC') {
+        const { data } = await supabase
+            .from('posts')
+            .select('*')
+            .order('created_at', { ascending: false });
+        posts = data;
+    } else if (query.includes('WHERE username =')) {
+        const { data } = await supabase
+            .from('posts')
+            .select('*')
+            .eq('username', params[0])
+            .order('created_at', { ascending: false });
+        posts = data;
+    } else if (query.includes('WHERE id =')) {
+        const { data } = await supabase
+            .from('posts')
+            .select('*')
+            .eq('id', params[0]);
+        posts = data;
+    } else {
+        const { data } = await supabase
+            .from('posts')
+            .select('*')
+            .order('created_at', { ascending: false });
+        posts = data;
+    }
     
     if (!posts) return [];
     
@@ -160,7 +218,17 @@ async function getPostsWithDetails(query, params = [], userId = null) {
 }
 
 async function incrementViews(postId) {
-    await supabase.rpc('increment_views', { post_id: postId });
+    const { data: post } = await supabase
+        .from('posts')
+        .select('views')
+        .eq('id', postId)
+        .single();
+    if (post) {
+        await supabase
+            .from('posts')
+            .update({ views: (post.views || 0) + 1 })
+            .eq('id', postId);
+    }
 }
 
 async function getActiveUsersCount() {
@@ -168,7 +236,7 @@ async function getActiveUsersCount() {
         .from('users')
         .select('*', { count: 'exact', head: true })
         .eq('is_banned', 0);
-    return count;
+    return count || 0;
 }
 
 // ========== КАПЧА ==========
@@ -191,8 +259,8 @@ app.get('/', async (req, res) => {
     const posts = await getPostsWithDetails('SELECT * FROM posts ORDER BY created_at DESC', [], req.session.user?.id);
     const stats = {
         totalUsers: await getActiveUsersCount(),
-        totalPosts: (await supabase.from('posts').select('*', { count: 'exact', head: true })).count,
-        totalComments: (await supabase.from('comments').select('*', { count: 'exact', head: true })).count
+        totalPosts: (await supabase.from('posts').select('*', { count: 'exact', head: true })).count || 0,
+        totalComments: (await supabase.from('comments').select('*', { count: 'exact', head: true })).count || 0
     };
     res.render('index', { posts, user: req.session.user, title: 'Лента', stats });
 });
@@ -204,11 +272,12 @@ app.get('/popular', async (req, res) => {
         .order('likes', { ascending: false })
         .limit(50);
     
-    for (const post of posts) {
+    for (const post of posts || []) {
         const { data: comments } = await supabase
             .from('comments')
             .select('*')
-            .eq('post_id', post.id);
+            .eq('post_id', post.id)
+            .order('created_at', { ascending: false });
         post.comments = comments || [];
         post.author = await getAuthorInfo(post.username);
         if (req.session.user?.id) {
@@ -218,8 +287,8 @@ app.get('/popular', async (req, res) => {
     
     const stats = {
         totalUsers: await getActiveUsersCount(),
-        totalPosts: (await supabase.from('posts').select('*', { count: 'exact', head: true })).count,
-        totalComments: (await supabase.from('comments').select('*', { count: 'exact', head: true })).count
+        totalPosts: (await supabase.from('posts').select('*', { count: 'exact', head: true })).count || 0,
+        totalComments: (await supabase.from('comments').select('*', { count: 'exact', head: true })).count || 0
     };
     res.render('index', { posts: posts || [], user: req.session.user, title: 'Популярное', stats });
 });
@@ -246,8 +315,8 @@ app.get('/search', async (req, res) => {
     
     const stats = {
         totalUsers: await getActiveUsersCount(),
-        totalPosts: (await supabase.from('posts').select('*', { count: 'exact', head: true })).count,
-        totalComments: (await supabase.from('comments').select('*', { count: 'exact', head: true })).count
+        totalPosts: (await supabase.from('posts').select('*', { count: 'exact', head: true })).count || 0,
+        totalComments: (await supabase.from('comments').select('*', { count: 'exact', head: true })).count || 0
     };
     res.render('index', { posts: posts || [], user: req.session.user, title: `Поиск: ${q}`, stats });
 });
@@ -304,8 +373,8 @@ app.get('/post/:id', async (req, res) => {
     
     const stats = {
         totalUsers: await getActiveUsersCount(),
-        totalPosts: (await supabase.from('posts').select('*', { count: 'exact', head: true })).count,
-        totalComments: (await supabase.from('comments').select('*', { count: 'exact', head: true })).count
+        totalPosts: (await supabase.from('posts').select('*', { count: 'exact', head: true })).count || 0,
+        totalComments: (await supabase.from('comments').select('*', { count: 'exact', head: true })).count || 0
     };
     res.render('post', { post, user: req.session.user, stats, title: post.title });
 });
@@ -331,16 +400,17 @@ app.post('/post/:id/react', async (req, res) => {
                 .eq('user_id', userId)
                 .eq('post_id', postId);
             
-            // Уменьшаем счётчик
             const { data: post } = await supabase
                 .from('posts')
                 .select(`${type}s`)
                 .eq('id', postId)
                 .single();
-            await supabase
-                .from('posts')
-                .update({ [`${type}s`]: post[`${type}s`] - 1 })
-                .eq('id', postId);
+            if (post) {
+                await supabase
+                    .from('posts')
+                    .update({ [`${type}s`]: Math.max(0, (post[`${type}s`] || 0) - 1) })
+                    .eq('id', postId);
+            }
         } else {
             await supabase
                 .from('reactions')
@@ -354,13 +424,15 @@ app.post('/post/:id/react', async (req, res) => {
                 .select(`${type}s, ${opposite}s`)
                 .eq('id', postId)
                 .single();
-            await supabase
-                .from('posts')
-                .update({ 
-                    [`${type}s`]: post[`${type}s`] + 1,
-                    [`${opposite}s`]: post[`${opposite}s`] - 1
-                })
-                .eq('id', postId);
+            if (post) {
+                await supabase
+                    .from('posts')
+                    .update({ 
+                        [`${type}s`]: (post[`${type}s`] || 0) + 1,
+                        [`${opposite}s`]: Math.max(0, (post[`${opposite}s`] || 0) - 1)
+                    })
+                    .eq('id', postId);
+            }
         }
     } else {
         await supabase
@@ -372,10 +444,12 @@ app.post('/post/:id/react', async (req, res) => {
             .select(`${type}s`)
             .eq('id', postId)
             .single();
-        await supabase
-            .from('posts')
-            .update({ [`${type}s`]: post[`${type}s`] + 1 })
-            .eq('id', postId);
+        if (post) {
+            await supabase
+                .from('posts')
+                .update({ [`${type}s`]: (post[`${type}s`] || 0) + 1 })
+                .eq('id', postId);
+        }
     }
     
     res.redirect(req.get('referer') || '/');
@@ -578,9 +652,10 @@ app.post('/settings/password', async (req, res) => {
         .single();
     
     if (bcrypt.compareSync(oldPassword, user.password)) {
+        const hashed = bcrypt.hashSync(newPassword, 10);
         await supabase
             .from('users')
-            .update({ password: bcrypt.hashSync(newPassword, 10) })
+            .update({ password: hashed })
             .eq('id', req.session.user.id);
         res.render('settings', { user: req.session.user, error: null, success: 'Пароль изменён', title: 'Настройки' });
     } else {
@@ -680,9 +755,9 @@ app.get('/admin', async (req, res) => {
     
     const stats = {
         totalUsers: await getActiveUsersCount(),
-        totalPosts: (await supabase.from('posts').select('*', { count: 'exact', head: true })).count,
-        totalComments: (await supabase.from('comments').select('*', { count: 'exact', head: true })).count,
-        totalMessages: (await supabase.from('messages').select('*', { count: 'exact', head: true })).count
+        totalPosts: (await supabase.from('posts').select('*', { count: 'exact', head: true })).count || 0,
+        totalComments: (await supabase.from('comments').select('*', { count: 'exact', head: true })).count || 0,
+        totalMessages: (await supabase.from('messages').select('*', { count: 'exact', head: true })).count || 0
     };
     
     const { data: allUsers } = await supabase
@@ -715,7 +790,17 @@ app.post('/admin/user/:id/verify', async (req, res) => {
             .update({ is_verified: newStatus })
             .eq('id', req.params.id);
         if (newStatus === 1) {
-            await supabase.rpc('update_reputation', { user_id: req.params.id, delta: 20 });
+            const { data: u } = await supabase
+                .from('users')
+                .select('reputation')
+                .eq('id', req.params.id)
+                .single();
+            if (u) {
+                await supabase
+                    .from('users')
+                    .update({ reputation: (u.reputation || 0) + 20 })
+                    .eq('id', req.params.id);
+            }
         }
     }
     res.redirect('/admin');
@@ -761,7 +846,17 @@ app.post('/admin/user/:id/removeadmin', async (req, res) => {
 app.post('/admin/user/:id/addreputation', async (req, res) => {
     if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
     const amount = parseInt(req.body.amount) || 0;
-    await supabase.rpc('update_reputation', { user_id: req.params.id, delta: amount });
+    const { data: user } = await supabase
+        .from('users')
+        .select('reputation')
+        .eq('id', req.params.id)
+        .single();
+    if (user) {
+        await supabase
+            .from('users')
+            .update({ reputation: (user.reputation || 0) + amount })
+            .eq('id', req.params.id);
+    }
     res.redirect('/admin');
 });
 
