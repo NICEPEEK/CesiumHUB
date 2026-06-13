@@ -9,10 +9,12 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 
-// Supabase клиент (без realtime, он нам не нужен)
+// Supabase клиент с ОТКЛЮЧЁННЫМ realtime (не требует WebSocket)
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+const supabase = createClient(supabaseUrl, supabaseKey, {
+    realtime: { enabled: false }
+});
 
 app.set('view engine', 'ejs');
 app.use(express.urlencoded({ extended: true }));
