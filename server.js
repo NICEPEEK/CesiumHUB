@@ -6,19 +6,15 @@ const path = require('path');
 const fs = require('fs');
 const svgCaptcha = require('svg-captcha');
 const { createClient } = require('@supabase/supabase-js');
-const WebSocket = require('ws');
 
 const app = express();
 
-// Supabase клиент с WebSocket поддержкой для Node 20
+// Supabase клиент с ОТКЛЮЧЁННЫМ realtime (не требует WebSocket)
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_ANON_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey, {
-    realtime: {
-        webSocketImpl: WebSocket
-    }
+    realtime: { enabled: false }
 });
-
 // ========== СОЗДАНИЕ ТАБЛИЦ В SUPABASE ==========
 async function initDB() {
     // SQL запросы для создания таблиц
