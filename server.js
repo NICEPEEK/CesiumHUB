@@ -21,7 +21,11 @@ app.use(session({
     secret: 'cesium-gdps-secret-key',
     resave: false,
     saveUninitialized: false,
-    cookie: { maxAge: 30 * 24 * 60 * 60 * 1000 }
+    cookie: { 
+        maxAge: 30 * 24 * 60 * 60 * 1000, // 30 дней
+        httpOnly: true,
+        secure: false // для Railway https ставим true, но для локального false
+    }
 }));
 
 // ========== ФУНКЦИЯ ДЛЯ РЕПУТАЦИИ ==========
@@ -150,27 +154,31 @@ async function incrementViews(postId) {
     await pool.query('UPDATE posts SET views = views + 1 WHERE id = $1', [postId]);
 }
 
+// Обновляем счётчик активных пользователей (исключая забаненных)
+async function getActiveUsersCount() {
+    const result = await pool.query('SELECT COUNT(*) as count FROM users WHERE is_banned = 0');
+    return result.rows[0].count;
+}
+
 // ========== МАРШРУТЫ ==========
 app.get('/', async (req, res) => {
     const posts = await getPostsWithDetails('SELECT * FROM posts ORDER BY created_at DESC', [], req.session.user?.id);
     const stats = {
-        totalUsers: (await pool.query('SELECT COUNT(*) as count FROM users')).rows[0].count,
+        totalUsers: await getActiveUsersCount(),
         totalPosts: (await pool.query('SELECT COUNT(*) as count FROM posts')).rows[0].count,
         totalComments: (await pool.query('SELECT COUNT(*) as count FROM comments')).rows[0].count
     };
-    const topUsers = (await pool.query('SELECT username, reputation FROM users ORDER BY reputation DESC LIMIT 5')).rows;
-    res.render('index', { posts, user: req.session.user, title: 'Лента', stats, topUsers });
+    res.render('index', { posts, user: req.session.user, title: 'Лента', stats });
 });
 
 app.get('/popular', async (req, res) => {
     const posts = await getPostsWithDetails('SELECT * FROM posts ORDER BY likes DESC, created_at DESC LIMIT 50', [], req.session.user?.id);
     const stats = {
-        totalUsers: (await pool.query('SELECT COUNT(*) as count FROM users')).rows[0].count,
+        totalUsers: await getActiveUsersCount(),
         totalPosts: (await pool.query('SELECT COUNT(*) as count FROM posts')).rows[0].count,
         totalComments: (await pool.query('SELECT COUNT(*) as count FROM comments')).rows[0].count
     };
-    const topUsers = (await pool.query('SELECT username, reputation FROM users ORDER BY reputation DESC LIMIT 5')).rows;
-    res.render('index', { posts, user: req.session.user, title: 'Популярное', stats, topUsers });
+    res.render('index', { posts, user: req.session.user, title: 'Популярное', stats });
 });
 
 app.get('/search', async (req, res) => {
@@ -181,12 +189,11 @@ app.get('/search', async (req, res) => {
         req.session.user?.id
     );
     const stats = {
-        totalUsers: (await pool.query('SELECT COUNT(*) as count FROM users')).rows[0].count,
+        totalUsers: await getActiveUsersCount(),
         totalPosts: (await pool.query('SELECT COUNT(*) as count FROM posts')).rows[0].count,
         totalComments: (await pool.query('SELECT COUNT(*) as count FROM comments')).rows[0].count
     };
-    const topUsers = (await pool.query('SELECT username, reputation FROM users ORDER BY reputation DESC LIMIT 5')).rows;
-    res.render('index', { posts, user: req.session.user, title: `Поиск: ${q}`, stats, topUsers });
+    res.render('index', { posts, user: req.session.user, title: `Поиск: ${q}`, stats });
 });
 
 app.get('/user/:username', async (req, res) => {
@@ -202,12 +209,11 @@ app.get('/post/:id', async (req, res) => {
     const posts = await getPostsWithDetails('SELECT * FROM posts WHERE id = $1', [req.params.id], req.session.user?.id);
     if (posts.length === 0) return res.status(404).render('error', { user: req.session.user, error: 'Пост не найден', code: 404, url: req.url });
     const stats = {
-        totalUsers: (await pool.query('SELECT COUNT(*) as count FROM users')).rows[0].count,
+        totalUsers: await getActiveUsersCount(),
         totalPosts: (await pool.query('SELECT COUNT(*) as count FROM posts')).rows[0].count,
         totalComments: (await pool.query('SELECT COUNT(*) as count FROM comments')).rows[0].count
     };
-    const topUsers = (await pool.query('SELECT username, reputation FROM users ORDER BY reputation DESC LIMIT 5')).rows;
-    res.render('index', { posts, user: req.session.user, title: posts[0].title, stats, topUsers });
+    res.render('post', { post: posts[0], user: req.session.user, stats, title: posts[0].title });
 });
 
 app.post('/post/:id/react', async (req, res) => {
@@ -236,7 +242,7 @@ app.post('/post/:id/react', async (req, res) => {
 app.post('/post/:id/comment', async (req, res) => {
     if (!req.session.user) return res.redirect('/login');
     await pool.query('INSERT INTO comments (post_id, username, text) VALUES ($1, $2, $3)', [req.params.id, req.session.user.username, req.body.text]);
-    res.redirect(req.get('referer') || '/');
+    res.redirect(`/post/${req.params.id}`);
 });
 
 app.post('/post/:id/delete', async (req, res) => {
@@ -254,10 +260,7 @@ app.post('/post/:id/delete', async (req, res) => {
 app.get('/register', (req, res) => res.render('register', { user: req.session.user, error: null, title: 'Регистрация' }));
 app.post('/register', async (req, res) => {
     try {
-        // Получаем IP пользователя
         const userIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-        
-        // Проверяем сколько аккаунтов уже зарегистрировано с этого IP
         const ipCheck = await pool.query('SELECT account_count FROM ip_limits WHERE ip = $1', [userIp]);
         
         if (ipCheck.rows.length > 0 && ipCheck.rows[0].account_count >= 2) {
@@ -267,7 +270,6 @@ app.post('/register', async (req, res) => {
         const hashed = bcrypt.hashSync(req.body.password, 10);
         await pool.query('INSERT INTO users (username, password, reputation) VALUES ($1, $2, $3)', [req.body.username, hashed, 0]);
         
-        // Обновляем счётчик IP
         if (ipCheck.rows.length > 0) {
             await pool.query('UPDATE ip_limits SET account_count = account_count + 1 WHERE ip = $1', [userIp]);
         } else {
@@ -410,7 +412,7 @@ app.get('/admin', async (req, res) => {
     if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/');
     
     const stats = {
-        totalUsers: (await pool.query('SELECT COUNT(*) as count FROM users')).rows[0].count,
+        totalUsers: await getActiveUsersCount(),
         totalPosts: (await pool.query('SELECT COUNT(*) as count FROM posts')).rows[0].count,
         totalComments: (await pool.query('SELECT COUNT(*) as count FROM comments')).rows[0].count,
         totalMessages: (await pool.query('SELECT COUNT(*) as count FROM messages')).rows[0].count
@@ -421,7 +423,6 @@ app.get('/admin', async (req, res) => {
     res.render('admin', { user: req.session.user, stats, allUsers, allPosts, title: 'Админ-панель' });
 });
 
-// Выдать/забрать верификацию
 app.post('/admin/user/:id/verify', async (req, res) => {
     if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
     const user = (await pool.query('SELECT is_verified FROM users WHERE id = $1', [req.params.id])).rows[0];
@@ -432,7 +433,6 @@ app.post('/admin/user/:id/verify', async (req, res) => {
     res.redirect('/admin');
 });
 
-// Забанить пользователя
 app.post('/admin/user/:id/ban', async (req, res) => {
     if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
     const reason = req.body.reason || 'Нарушение правил';
@@ -440,28 +440,24 @@ app.post('/admin/user/:id/ban', async (req, res) => {
     res.redirect('/admin');
 });
 
-// Разбанить пользователя
 app.post('/admin/user/:id/unban', async (req, res) => {
     if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
     await pool.query('UPDATE users SET is_banned = 0, ban_reason = "" WHERE id = $1', [req.params.id]);
     res.redirect('/admin');
 });
 
-// Сделать администратором
 app.post('/admin/user/:id/makeadmin', async (req, res) => {
     if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
     await pool.query('UPDATE users SET is_admin = 1 WHERE id = $1', [req.params.id]);
     res.redirect('/admin');
 });
 
-// Снять администратора
 app.post('/admin/user/:id/removeadmin', async (req, res) => {
     if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
     await pool.query('UPDATE users SET is_admin = 0 WHERE id = $1', [req.params.id]);
     res.redirect('/admin');
 });
 
-// Добавить репутацию
 app.post('/admin/user/:id/addreputation', async (req, res) => {
     if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
     const amount = parseInt(req.body.amount) || 0;
@@ -469,7 +465,6 @@ app.post('/admin/user/:id/addreputation', async (req, res) => {
     res.redirect('/admin');
 });
 
-// Удалить пост через админку
 app.post('/admin/post/:id/delete', async (req, res) => {
     if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
     await pool.query('DELETE FROM comments WHERE post_id = $1', [req.params.id]);
