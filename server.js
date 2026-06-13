@@ -110,6 +110,15 @@ async function getAuthorInfo(username) {
     return result.rows[0] || { username, avatar: 'default.png', is_verified: 0, is_banned: 0, reputation: 0 };
 }
 
+function getReputationLevel(reputation) {
+    if (reputation >= 100) return { class: 'reputation-positive', text: 'Легенда' };
+    if (reputation >= 50) return { class: 'reputation-positive', text: 'Звезда' };
+    if (reputation >= 20) return { class: 'reputation-positive', text: 'Хорошая' };
+    if (reputation >= 0) return { class: 'reputation-neutral', text: 'Нейтральная' };
+    if (reputation >= -20) return { class: 'reputation-negative', text: 'Сомнительная' };
+    return { class: 'reputation-negative', text: 'Плохая' };
+}
+
 async function getUserReaction(userId, postId) {
     if (!userId) return null;
     const result = await pool.query('SELECT type FROM reactions WHERE user_id = $1 AND post_id = $2', [userId, postId]);
@@ -166,11 +175,13 @@ app.get('/search', async (req, res) => {
     res.render('index', { posts, user: req.session.user, title: `Поиск: ${q}` });
 });
 
+
 app.get('/user/:username', async (req, res) => {
     const profileUser = (await pool.query('SELECT * FROM users WHERE username = $1', [req.params.username])).rows[0];
     if (!profileUser) return res.status(404).render('error', { user: req.session.user, error: 'Пользователь не найден', code: 404, url: req.url });
     const posts = await getPostsWithDetails('SELECT * FROM posts WHERE username = $1 ORDER BY created_at DESC', [req.params.username], req.session.user?.id);
-    res.render('profile', { posts, user: req.session.user, profileUser, title: `Профиль ${req.params.username}` });
+    const reputationLevel = getReputationLevel(profileUser.reputation);
+    res.render('profile', { posts, user: req.session.user, profileUser, reputationLevel, title: `Профиль ${req.params.username}` });
 });
 
 app.get('/post/:id', async (req, res) => {
