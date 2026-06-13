@@ -61,11 +61,14 @@
                 <a href="/post/<%= post.id %>" class="reaction-btn"><i class="bi bi-chat"></i> <%= post.comments?.length || 0 %></a>
             </div>
             <div class="mt-3 pt-2 border-top">
-                <% if(post.comments && post.comments.length) { %>
-                    <div class="small text-muted">
-                        <strong><%= post.comments[0].username %></strong> 
-                        <%= post.comments[0].text ? post.comments[0].text.slice(0,80) : '' %>
-                    </div>
+                <% if(post.comments && post.comments.length > 0) { %>
+                    <% const firstComment = post.comments[0]; %>
+                    <% if(firstComment && firstComment.text) { %>
+                        <div class="small text-muted">
+                            <strong><%= firstComment.username %></strong> 
+                            <%= firstComment.text.length > 80 ? firstComment.text.slice(0,80) + '...' : firstComment.text %>
+                        </div>
+                    <% } %>
                 <% } %>
                 <% if(user) { %>
                     <form action="/post/<%= post.id %>/comment" method="POST" class="mt-2 d-flex gap-2">
