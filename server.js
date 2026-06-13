@@ -6,28 +6,18 @@ const path = require('path');
 const fs = require('fs');
 const svgCaptcha = require('svg-captcha');
 const { createClient } = require('@supabase/supabase-js');
+const WebSocket = require('ws');
 
 const app = express();
 
-// Supabase клиент
+// Supabase клиент с WebSocket поддержкой для Node 20
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
-
-app.set('view engine', 'ejs');
-app.use(express.urlencoded({ extended: true }));
-app.use(express.static('public'));
-app.use(session({
-    secret: 'cesium-gdps-secret-key',
-    resave: false,
-    saveUninitialized: false,
-    cookie: { 
-        maxAge: 30 * 24 * 60 * 60 * 1000,
-        httpOnly: true,
-        secure: false,
-        sameSite: 'lax'
+const supabase = createClient(supabaseUrl, supabaseKey, {
+    realtime: {
+        webSocketImpl: WebSocket
     }
-}));
+});
 
 // ========== СОЗДАНИЕ ТАБЛИЦ В SUPABASE ==========
 async function initDB() {
