@@ -10,10 +10,14 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 
-// Supabase клиент (без WebSocket, Node 22 имеет встроенную поддержку)
+// Supabase клиент с отключённым realtime (не требует WebSocket)
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+const supabase = createClient(supabaseUrl, supabaseKey, {
+    realtime: {
+        enabled: false
+    }
+});
 
 // Подключение к PostgreSQL
 const pool = new Pool({
@@ -29,7 +33,7 @@ app.use(session({
     resave: false,
     saveUninitialized: false,
     cookie: { 
-        maxAge: 30 * 24 * 60 * 60 * 1000, // 30 дней
+        maxAge: 30 * 24 * 60 * 60 * 1000,
         httpOnly: true,
         secure: false,
         sameSite: 'lax'
