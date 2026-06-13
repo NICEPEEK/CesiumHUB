@@ -5,8 +5,15 @@ const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const svgCaptcha = require('svg-captcha');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
+
+// Supabase клиент
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_ANON_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Подключение к PostgreSQL
 const pool = new Pool({
@@ -24,7 +31,8 @@ app.use(session({
     cookie: { 
         maxAge: 30 * 24 * 60 * 60 * 1000, // 30 дней
         httpOnly: true,
-        secure: false // для Railway https ставим true, но для локального false
+        secure: false,
+        sameSite: 'lax'
     }
 }));
 
@@ -116,7 +124,7 @@ async function initDB() {
 }
 initDB();
 
-// ========== НАСТРОЙКА ЗАГРУЗКИ ФАЙЛОВ ==========
+// ========== НАСТРОЙКА ЗАГРУЗКИ ФАЙЛОВ (локальная, для совместимости) ==========
 const uploadDir = './public/uploads';
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 const storage = multer.diskStorage({
@@ -154,11 +162,47 @@ async function incrementViews(postId) {
     await pool.query('UPDATE posts SET views = views + 1 WHERE id = $1', [postId]);
 }
 
-// Обновляем счётчик активных пользователей (исключая забаненных)
 async function getActiveUsersCount() {
     const result = await pool.query('SELECT COUNT(*) as count FROM users WHERE is_banned = 0');
     return result.rows[0].count;
 }
+
+// ========== КАПЧА ==========
+app.get('/captcha', (req, res) => {
+    const captcha = svgCaptcha.create({
+        size: 5,
+        noise: 2,
+        color: true,
+        background: '#1a1a2e',
+        width: 150,
+        height: 50
+    });
+    req.session.captchaText = captcha.text;
+    res.type('svg');
+    res.send(captcha.data);
+});
+
+// ========== СОЗДАНИЕ DEFAULT AVATAR В SUPABASE ==========
+async function createDefaultAvatar() {
+    const defaultSvg = `<svg width="100" height="100" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="50" cy="50" r="50" fill="#3b82f6"/>
+        <circle cx="50" cy="35" r="15" fill="white"/>
+        <path d="M20 75 Q50 55 80 75" stroke="white" stroke-width="8" fill="none" stroke-linecap="round"/>
+    </svg>`;
+    
+    try {
+        await supabase.storage
+            .from('uploads')
+            .upload('default.png', Buffer.from(defaultSvg), {
+                contentType: 'image/svg+xml',
+                upsert: true
+            });
+        console.log('Default avatar создан в Supabase');
+    } catch(e) {
+        console.log('Default avatar уже существует');
+    }
+}
+createDefaultAvatar();
 
 // ========== МАРШРУТЫ ==========
 app.get('/', async (req, res) => {
@@ -260,6 +304,11 @@ app.post('/post/:id/delete', async (req, res) => {
 app.get('/register', (req, res) => res.render('register', { user: req.session.user, error: null, title: 'Регистрация' }));
 app.post('/register', async (req, res) => {
     try {
+        // Проверка капчи
+        if (!req.body.captcha || req.body.captcha.toLowerCase() !== req.session.captchaText?.toLowerCase()) {
+            return res.render('register', { user: req.session.user, error: 'Неверный код с картинки', title: 'Регистрация' });
+        }
+        
         const userIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
         const ipCheck = await pool.query('SELECT account_count FROM ip_limits WHERE ip = $1', [userIp]);
         
@@ -276,6 +325,7 @@ app.post('/register', async (req, res) => {
             await pool.query('INSERT INTO ip_limits (ip, account_count) VALUES ($1, $2)', [userIp, 1]);
         }
         
+        req.session.captchaText = null;
         res.redirect('/login');
     } catch(e) {
         res.render('register', { user: req.session.user, error: 'Ник уже занят', title: 'Регистрация' });
@@ -301,10 +351,32 @@ app.get('/create', (req, res) => {
     res.render('create', { user: req.session.user, title: 'Создать пост' });
 });
 
+// СОЗДАНИЕ ПОСТА С ЗАГРУЗКОЙ В SUPABASE
 app.post('/create', upload.single('media'), async (req, res) => {
     if (!req.session.user) return res.redirect('/login');
-    const media = req.file ? req.file.filename : null;
-    await pool.query('INSERT INTO posts (title, description, image, username) VALUES ($1, $2, $3, $4)', [req.body.title, req.body.description, media, req.session.user.username]);
+    
+    let mediaUrl = null;
+    if (req.file) {
+        const fileExt = path.extname(req.file.originalname);
+        const fileName = `${Date.now()}${fileExt}`;
+        const fileBuffer = fs.readFileSync(req.file.path);
+        
+        const { error } = await supabase.storage
+            .from('uploads')
+            .upload(`posts/${fileName}`, fileBuffer, {
+                contentType: req.file.mimetype
+            });
+        
+        if (!error) {
+            const { data: { publicUrl } } = supabase.storage
+                .from('uploads')
+                .getPublicUrl(`posts/${fileName}`);
+            mediaUrl = publicUrl;
+        }
+    }
+    
+    await pool.query('INSERT INTO posts (title, description, image, username) VALUES ($1, $2, $3, $4)', 
+        [req.body.title, req.body.description, mediaUrl, req.session.user.username]);
     res.redirect('/');
 });
 

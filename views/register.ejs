@@ -5,13 +5,36 @@
             <h3 class="fw-bold text-center mb-4">Регистрация</h3>
             <% if(error) { %><div class="alert alert-danger"><%= error %></div><% } %>
             <form method="POST" action="/register">
-                <div class="mb-3"><label class="form-label">Никнейм</label><input type="text" name="username" class="form-control" required></div>
-                <div class="mb-4"><label class="form-label">Пароль</label><input type="password" name="password" class="form-control" required></div>
+                <div class="mb-3">
+                    <label class="form-label">Никнейм</label>
+                    <input type="text" name="username" class="form-control" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Пароль</label>
+                    <input type="password" name="password" class="form-control" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Введите код с картинки</label>
+                    <div class="d-flex gap-2 align-items-center">
+                        <img src="/captcha" alt="CAPTCHA" onclick="this.src='/captcha?t='+Date.now()" style="cursor: pointer; border-radius: 8px;">
+                        <button type="button" class="btn btn-sm btn-outline-dark" onclick="document.querySelector('#captchaImg').src='/captcha?t='+Date.now()">⟳</button>
+                    </div>
+                    <input type="text" name="captcha" class="form-control mt-2" placeholder="Код с картинки" required>
+                    <small class="text-muted">Нажмите на картинку, чтобы обновить</small>
+                </div>
                 <button type="submit" class="btn btn-primary-dark w-100">Создать аккаунт</button>
                 <div class="text-center mt-3"><a href="/login" class="text-decoration-none text-accent">Уже есть аккаунт? Войти</a></div>
             </form>
         </div>
     </div>
 </div>
+<script>
+    // Автообновление капчи при клике
+    document.querySelectorAll('img[src="/captcha"]').forEach(img => {
+        img.addEventListener('click', function() {
+            this.src = '/captcha?t=' + Date.now();
+        });
+    });
+</script>
 </body>
 </html>
