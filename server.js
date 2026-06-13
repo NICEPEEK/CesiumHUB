@@ -6,21 +6,14 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const svgCaptcha = require('svg-captcha');
-
-// Импорт ws для Supabase (Node 20 не имеет встроенного WebSocket)
-const WebSocket = require('ws');
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 
-// Supabase клиент с правильной настройкой WebSocket
+// Supabase клиент (без WebSocket, Node 22 имеет встроенную поддержку)
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey, {
-    realtime: {
-        webSocketImpl: WebSocket
-    }
-});
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Подключение к PostgreSQL
 const pool = new Pool({
