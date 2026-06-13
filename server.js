@@ -1,6 +1,5 @@
 const express = require('express');
 const session = require('express-session');
-const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const path = require('path');
@@ -10,20 +9,10 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 
-// Supabase клиент с отключённым realtime (не требует WebSocket)
+// Supabase клиент
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey, {
-    realtime: {
-        enabled: false
-    }
-});
-
-// Подключение к PostgreSQL
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
-});
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 app.set('view engine', 'ejs');
 app.use(express.urlencoded({ extended: true }));
@@ -40,20 +29,11 @@ app.use(session({
     }
 }));
 
-// ========== ФУНКЦИЯ ДЛЯ РЕПУТАЦИИ ==========
-function getReputationLevel(reputation) {
-    if (reputation >= 100) return { class: 'reputation-positive', text: 'Легенда' };
-    if (reputation >= 50) return { class: 'reputation-positive', text: 'Звезда' };
-    if (reputation >= 20) return { class: 'reputation-positive', text: 'Хорошая' };
-    if (reputation >= 0) return { class: 'reputation-neutral', text: 'Нейтральная' };
-    if (reputation >= -20) return { class: 'reputation-negative', text: 'Сомнительная' };
-    return { class: 'reputation-negative', text: 'Плохая' };
-}
-
-// ========== СОЗДАНИЕ ТАБЛИЦ ==========
+// ========== СОЗДАНИЕ ТАБЛИЦ В SUPABASE ==========
 async function initDB() {
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS users (
+    // SQL запросы для создания таблиц
+    const sqlQueries = [
+        `CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
             username TEXT UNIQUE,
             password TEXT,
@@ -64,10 +44,8 @@ async function initDB() {
             ban_reason TEXT DEFAULT '',
             reputation INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS posts (
+        )`,
+        `CREATE TABLE IF NOT EXISTS posts (
             id SERIAL PRIMARY KEY,
             title TEXT,
             description TEXT,
@@ -77,98 +55,130 @@ async function initDB() {
             dislikes INTEGER DEFAULT 0,
             views INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS comments (
+        )`,
+        `CREATE TABLE IF NOT EXISTS comments (
             id SERIAL PRIMARY KEY,
             post_id INTEGER,
             username TEXT,
             text TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS reactions (
+        )`,
+        `CREATE TABLE IF NOT EXISTS reactions (
             user_id INTEGER,
             post_id INTEGER,
             type TEXT CHECK(type IN ('like', 'dislike')),
             PRIMARY KEY (user_id, post_id)
-        )
-    `);
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS messages (
+        )`,
+        `CREATE TABLE IF NOT EXISTS messages (
             id SERIAL PRIMARY KEY,
             from_user_id INTEGER,
             to_user_id INTEGER,
             message TEXT,
             is_read INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS ip_limits (
+        )`,
+        `CREATE TABLE IF NOT EXISTS ip_limits (
             ip TEXT PRIMARY KEY,
             account_count INTEGER DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
+        )`
+    ];
+
+    for (const sql of sqlQueries) {
+        await supabase.rpc('exec_sql', { query: sql }).catch(e => console.log('Table already exists'));
+    }
 
     // Создаём админа NICEPEEK если нет
-    const adminCheck = await pool.query('SELECT * FROM users WHERE username = $1', ['NICEPEEK']);
-    if (adminCheck.rows.length === 0) {
+    const { data: adminCheck } = await supabase
+        .from('users')
+        .select('*')
+        .eq('username', 'NICEPEEK')
+        .single();
+
+    if (!adminCheck) {
         const hashedPassword = bcrypt.hashSync('nicepeek123', 10);
-        await pool.query(
-            'INSERT INTO users (username, password, is_admin, is_verified, reputation) VALUES ($1, $2, $3, $4, $5)',
-            ['NICEPEEK', hashedPassword, 1, 1, 100]
-        );
+        await supabase
+            .from('users')
+            .insert({ username: 'NICEPEEK', password: hashedPassword, is_admin: 1, is_verified: 1, reputation: 100 });
         console.log('Администратор NICEPEEK создан');
     }
     console.log('База данных готова');
 }
 initDB();
 
-// ========== НАСТРОЙКА ЗАГРУЗКИ ФАЙЛОВ (локальная, для совместимости) ==========
-const uploadDir = './public/uploads';
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+// ========== НАСТРОЙКА ЗАГРУЗКИ (временная папка) ==========
+const tempDir = './temp';
+if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, uploadDir),
+    destination: (req, file, cb) => cb(null, tempDir),
     filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
 });
 const upload = multer({ storage: storage });
 
 // ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+function getReputationLevel(reputation) {
+    if (reputation >= 100) return { class: 'reputation-positive', text: 'Легенда' };
+    if (reputation >= 50) return { class: 'reputation-positive', text: 'Звезда' };
+    if (reputation >= 20) return { class: 'reputation-positive', text: 'Хорошая' };
+    if (reputation >= 0) return { class: 'reputation-neutral', text: 'Нейтральная' };
+    if (reputation >= -20) return { class: 'reputation-negative', text: 'Сомнительная' };
+    return { class: 'reputation-negative', text: 'Плохая' };
+}
+
 async function getAuthorInfo(username) {
-    const result = await pool.query('SELECT username, avatar, is_verified, is_banned, reputation FROM users WHERE username = $1', [username]);
-    return result.rows[0] || { username, avatar: 'default.png', is_verified: 0, is_banned: 0, reputation: 0 };
+    const { data } = await supabase
+        .from('users')
+        .select('username, avatar, is_verified, is_banned, reputation')
+        .eq('username', username)
+        .single();
+    return data || { username, avatar: 'default.png', is_verified: 0, is_banned: 0, reputation: 0 };
 }
 
 async function getUserReaction(userId, postId) {
     if (!userId) return null;
-    const result = await pool.query('SELECT type FROM reactions WHERE user_id = $1 AND post_id = $2', [userId, postId]);
-    return result.rows[0] ? result.rows[0].type : null;
+    const { data } = await supabase
+        .from('reactions')
+        .select('type')
+        .eq('user_id', userId)
+        .eq('post_id', postId)
+        .single();
+    return data ? data.type : null;
 }
 
 async function getPostsWithDetails(query, params = [], userId = null) {
-    const posts = await pool.query(query, params);
-    for (const post of posts.rows) {
-        const comments = await pool.query('SELECT * FROM comments WHERE post_id = $1 ORDER BY created_at DESC', [post.id]);
-        post.comments = comments.rows;
+    // Упрощённая версия для Supabase
+    const { data: posts } = await supabase
+        .from('posts')
+        .select('*')
+        .order('created_at', { ascending: false });
+    
+    if (!posts) return [];
+    
+    for (const post of posts) {
+        const { data: comments } = await supabase
+            .from('comments')
+            .select('*')
+            .eq('post_id', post.id)
+            .order('created_at', { ascending: false });
+        post.comments = comments || [];
         post.author = await getAuthorInfo(post.username);
         if (userId) {
             post.userReaction = await getUserReaction(userId, post.id);
         }
     }
-    return posts.rows;
+    return posts;
 }
 
 async function incrementViews(postId) {
-    await pool.query('UPDATE posts SET views = views + 1 WHERE id = $1', [postId]);
+    await supabase.rpc('increment_views', { post_id: postId });
 }
 
 async function getActiveUsersCount() {
-    const result = await pool.query('SELECT COUNT(*) as count FROM users WHERE is_banned = 0');
-    return result.rows[0].count;
+    const { count } = await supabase
+        .from('users')
+        .select('*', { count: 'exact', head: true })
+        .eq('is_banned', 0);
+    return count;
 }
 
 // ========== КАПЧА ==========
@@ -186,82 +196,128 @@ app.get('/captcha', (req, res) => {
     res.send(captcha.data);
 });
 
-// ========== СОЗДАНИЕ DEFAULT AVATAR В SUPABASE ==========
-async function createDefaultAvatar() {
-    const defaultSvg = `<svg width="100" height="100" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="50" cy="50" r="50" fill="#3b82f6"/>
-        <circle cx="50" cy="35" r="15" fill="white"/>
-        <path d="M20 75 Q50 55 80 75" stroke="white" stroke-width="8" fill="none" stroke-linecap="round"/>
-    </svg>`;
-    
-    try {
-        await supabase.storage
-            .from('uploads')
-            .upload('default.png', Buffer.from(defaultSvg), {
-                contentType: 'image/svg+xml',
-                upsert: true
-            });
-        console.log('Default avatar создан в Supabase');
-    } catch(e) {
-        console.log('Default avatar уже существует');
-    }
-}
-createDefaultAvatar();
-
 // ========== МАРШРУТЫ ==========
 app.get('/', async (req, res) => {
     const posts = await getPostsWithDetails('SELECT * FROM posts ORDER BY created_at DESC', [], req.session.user?.id);
     const stats = {
         totalUsers: await getActiveUsersCount(),
-        totalPosts: (await pool.query('SELECT COUNT(*) as count FROM posts')).rows[0].count,
-        totalComments: (await pool.query('SELECT COUNT(*) as count FROM comments')).rows[0].count
+        totalPosts: (await supabase.from('posts').select('*', { count: 'exact', head: true })).count,
+        totalComments: (await supabase.from('comments').select('*', { count: 'exact', head: true })).count
     };
     res.render('index', { posts, user: req.session.user, title: 'Лента', stats });
 });
 
 app.get('/popular', async (req, res) => {
-    const posts = await getPostsWithDetails('SELECT * FROM posts ORDER BY likes DESC, created_at DESC LIMIT 50', [], req.session.user?.id);
+    const { data: posts } = await supabase
+        .from('posts')
+        .select('*')
+        .order('likes', { ascending: false })
+        .limit(50);
+    
+    for (const post of posts) {
+        const { data: comments } = await supabase
+            .from('comments')
+            .select('*')
+            .eq('post_id', post.id);
+        post.comments = comments || [];
+        post.author = await getAuthorInfo(post.username);
+        if (req.session.user?.id) {
+            post.userReaction = await getUserReaction(req.session.user.id, post.id);
+        }
+    }
+    
     const stats = {
         totalUsers: await getActiveUsersCount(),
-        totalPosts: (await pool.query('SELECT COUNT(*) as count FROM posts')).rows[0].count,
-        totalComments: (await pool.query('SELECT COUNT(*) as count FROM comments')).rows[0].count
+        totalPosts: (await supabase.from('posts').select('*', { count: 'exact', head: true })).count,
+        totalComments: (await supabase.from('comments').select('*', { count: 'exact', head: true })).count
     };
-    res.render('index', { posts, user: req.session.user, title: 'Популярное', stats });
+    res.render('index', { posts: posts || [], user: req.session.user, title: 'Популярное', stats });
 });
 
 app.get('/search', async (req, res) => {
     const q = req.query.q || '';
-    const posts = await getPostsWithDetails(
-        'SELECT * FROM posts WHERE title ILIKE $1 OR description ILIKE $1 OR username ILIKE $1 ORDER BY created_at DESC',
-        [`%${q}%`],
-        req.session.user?.id
-    );
+    const { data: posts } = await supabase
+        .from('posts')
+        .select('*')
+        .or(`title.ilike.%${q}%,description.ilike.%${q}%,username.ilike.%${q}%`)
+        .order('created_at', { ascending: false });
+    
+    for (const post of posts || []) {
+        const { data: comments } = await supabase
+            .from('comments')
+            .select('*')
+            .eq('post_id', post.id);
+        post.comments = comments || [];
+        post.author = await getAuthorInfo(post.username);
+        if (req.session.user?.id) {
+            post.userReaction = await getUserReaction(req.session.user.id, post.id);
+        }
+    }
+    
     const stats = {
         totalUsers: await getActiveUsersCount(),
-        totalPosts: (await pool.query('SELECT COUNT(*) as count FROM posts')).rows[0].count,
-        totalComments: (await pool.query('SELECT COUNT(*) as count FROM comments')).rows[0].count
+        totalPosts: (await supabase.from('posts').select('*', { count: 'exact', head: true })).count,
+        totalComments: (await supabase.from('comments').select('*', { count: 'exact', head: true })).count
     };
-    res.render('index', { posts, user: req.session.user, title: `Поиск: ${q}`, stats });
+    res.render('index', { posts: posts || [], user: req.session.user, title: `Поиск: ${q}`, stats });
 });
 
 app.get('/user/:username', async (req, res) => {
-    const profileUser = (await pool.query('SELECT * FROM users WHERE username = $1', [req.params.username])).rows[0];
+    const { data: profileUser } = await supabase
+        .from('users')
+        .select('*')
+        .eq('username', req.params.username)
+        .single();
+    
     if (!profileUser) return res.status(404).render('error', { user: req.session.user, error: 'Пользователь не найден', code: 404, url: req.url });
-    const posts = await getPostsWithDetails('SELECT * FROM posts WHERE username = $1 ORDER BY created_at DESC', [req.params.username], req.session.user?.id);
+    
+    const { data: posts } = await supabase
+        .from('posts')
+        .select('*')
+        .eq('username', req.params.username)
+        .order('created_at', { ascending: false });
+    
+    for (const post of posts || []) {
+        const { data: comments } = await supabase
+            .from('comments')
+            .select('*')
+            .eq('post_id', post.id);
+        post.comments = comments || [];
+        post.author = await getAuthorInfo(post.username);
+    }
+    
     const reputationLevel = getReputationLevel(profileUser.reputation);
-    res.render('profile', { posts, user: req.session.user, profileUser, reputationLevel, title: `Профиль ${req.params.username}` });
+    res.render('profile', { posts: posts || [], user: req.session.user, profileUser, reputationLevel, title: `Профиль ${req.params.username}` });
 });
 
 app.get('/post/:id', async (req, res) => {
     await incrementViews(req.params.id);
-    const posts = await getPostsWithDetails('SELECT * FROM posts WHERE id = $1', [req.params.id], req.session.user?.id);
-    if (posts.length === 0) return res.status(404).render('error', { user: req.session.user, error: 'Пост не найден', code: 404, url: req.url });
+    
+    const { data: post } = await supabase
+        .from('posts')
+        .select('*')
+        .eq('id', req.params.id)
+        .single();
+    
+    if (!post) return res.status(404).render('error', { user: req.session.user, error: 'Пост не найден', code: 404, url: req.url });
+    
+    const { data: comments } = await supabase
+        .from('comments')
+        .select('*')
+        .eq('post_id', req.params.id)
+        .order('created_at', { ascending: false });
+    post.comments = comments || [];
+    post.author = await getAuthorInfo(post.username);
+    if (req.session.user?.id) {
+        post.userReaction = await getUserReaction(req.session.user.id, post.id);
+    }
+    
     const stats = {
         totalUsers: await getActiveUsersCount(),
-        totalPosts: (await pool.query('SELECT COUNT(*) as count FROM posts')).rows[0].count,
-        totalComments: (await pool.query('SELECT COUNT(*) as count FROM comments')).rows[0].count
+        totalPosts: (await supabase.from('posts').select('*', { count: 'exact', head: true })).count,
+        totalComments: (await supabase.from('comments').select('*', { count: 'exact', head: true })).count
     };
-    res.render('post', { post: posts[0], user: req.session.user, stats, title: posts[0].title });
+    res.render('post', { post, user: req.session.user, stats, title: post.title });
 });
 
 app.post('/post/:id/react', async (req, res) => {
@@ -269,64 +325,130 @@ app.post('/post/:id/react', async (req, res) => {
     const type = req.body.type;
     const userId = req.session.user.id;
     const postId = req.params.id;
-    const existing = (await pool.query('SELECT type FROM reactions WHERE user_id = $1 AND post_id = $2', [userId, postId])).rows[0];
+    
+    const { data: existing } = await supabase
+        .from('reactions')
+        .select('type')
+        .eq('user_id', userId)
+        .eq('post_id', postId)
+        .single();
     
     if (existing) {
         if (existing.type === type) {
-            await pool.query('DELETE FROM reactions WHERE user_id = $1 AND post_id = $2', [userId, postId]);
-            await pool.query(`UPDATE posts SET ${type}s = ${type}s - 1 WHERE id = $1`, [postId]);
+            await supabase
+                .from('reactions')
+                .delete()
+                .eq('user_id', userId)
+                .eq('post_id', postId);
+            
+            // Уменьшаем счётчик
+            const { data: post } = await supabase
+                .from('posts')
+                .select(`${type}s`)
+                .eq('id', postId)
+                .single();
+            await supabase
+                .from('posts')
+                .update({ [`${type}s`]: post[`${type}s`] - 1 })
+                .eq('id', postId);
         } else {
-            await pool.query('UPDATE reactions SET type = $1 WHERE user_id = $2 AND post_id = $3', [type, userId, postId]);
+            await supabase
+                .from('reactions')
+                .update({ type })
+                .eq('user_id', userId)
+                .eq('post_id', postId);
+            
             const opposite = type === 'like' ? 'dislike' : 'like';
-            await pool.query(`UPDATE posts SET ${type}s = ${type}s + 1, ${opposite}s = ${opposite}s - 1 WHERE id = $1`, [postId]);
+            const { data: post } = await supabase
+                .from('posts')
+                .select(`${type}s, ${opposite}s`)
+                .eq('id', postId)
+                .single();
+            await supabase
+                .from('posts')
+                .update({ 
+                    [`${type}s`]: post[`${type}s`] + 1,
+                    [`${opposite}s`]: post[`${opposite}s`] - 1
+                })
+                .eq('id', postId);
         }
     } else {
-        await pool.query('INSERT INTO reactions (user_id, post_id, type) VALUES ($1, $2, $3)', [userId, postId, type]);
-        await pool.query(`UPDATE posts SET ${type}s = ${type}s + 1 WHERE id = $1`, [postId]);
+        await supabase
+            .from('reactions')
+            .insert({ user_id: userId, post_id: postId, type });
+        
+        const { data: post } = await supabase
+            .from('posts')
+            .select(`${type}s`)
+            .eq('id', postId)
+            .single();
+        await supabase
+            .from('posts')
+            .update({ [`${type}s`]: post[`${type}s`] + 1 })
+            .eq('id', postId);
     }
+    
     res.redirect(req.get('referer') || '/');
 });
 
 app.post('/post/:id/comment', async (req, res) => {
     if (!req.session.user) return res.redirect('/login');
-    await pool.query('INSERT INTO comments (post_id, username, text) VALUES ($1, $2, $3)', [req.params.id, req.session.user.username, req.body.text]);
+    await supabase
+        .from('comments')
+        .insert({ post_id: req.params.id, username: req.session.user.username, text: req.body.text });
     res.redirect(`/post/${req.params.id}`);
 });
 
 app.post('/post/:id/delete', async (req, res) => {
     if (!req.session.user) return res.redirect('/login');
-    const post = (await pool.query('SELECT * FROM posts WHERE id = $1', [req.params.id])).rows[0];
-    const user = (await pool.query('SELECT is_admin FROM users WHERE id = $1', [req.session.user.id])).rows[0];
-    if (post && (post.username === req.session.user.username || user?.is_admin === 1)) {
-        await pool.query('DELETE FROM comments WHERE post_id = $1', [req.params.id]);
-        await pool.query('DELETE FROM reactions WHERE post_id = $1', [req.params.id]);
-        await pool.query('DELETE FROM posts WHERE id = $1', [req.params.id]);
+    
+    const { data: post } = await supabase
+        .from('posts')
+        .select('*')
+        .eq('id', req.params.id)
+        .single();
+    
+    if (post && (post.username === req.session.user.username || req.session.user.is_admin === 1)) {
+        await supabase.from('comments').delete().eq('post_id', req.params.id);
+        await supabase.from('reactions').delete().eq('post_id', req.params.id);
+        await supabase.from('posts').delete().eq('id', req.params.id);
     }
     res.redirect('/');
 });
 
 app.get('/register', (req, res) => res.render('register', { user: req.session.user, error: null, title: 'Регистрация' }));
+
 app.post('/register', async (req, res) => {
     try {
-        // Проверка капчи
         if (!req.body.captcha || req.body.captcha.toLowerCase() !== req.session.captchaText?.toLowerCase()) {
             return res.render('register', { user: req.session.user, error: 'Неверный код с картинки', title: 'Регистрация' });
         }
         
         const userIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-        const ipCheck = await pool.query('SELECT account_count FROM ip_limits WHERE ip = $1', [userIp]);
+        const { data: ipCheck } = await supabase
+            .from('ip_limits')
+            .select('account_count')
+            .eq('ip', userIp)
+            .single();
         
-        if (ipCheck.rows.length > 0 && ipCheck.rows[0].account_count >= 2) {
+        if (ipCheck && ipCheck.account_count >= 2) {
             return res.render('register', { user: req.session.user, error: 'С одного IP нельзя зарегистрировать более 2 аккаунтов', title: 'Регистрация' });
         }
         
         const hashed = bcrypt.hashSync(req.body.password, 10);
-        await pool.query('INSERT INTO users (username, password, reputation) VALUES ($1, $2, $3)', [req.body.username, hashed, 0]);
+        await supabase
+            .from('users')
+            .insert({ username: req.body.username, password: hashed, reputation: 0 });
         
-        if (ipCheck.rows.length > 0) {
-            await pool.query('UPDATE ip_limits SET account_count = account_count + 1 WHERE ip = $1', [userIp]);
+        if (ipCheck) {
+            await supabase
+                .from('ip_limits')
+                .update({ account_count: ipCheck.account_count + 1 })
+                .eq('ip', userIp);
         } else {
-            await pool.query('INSERT INTO ip_limits (ip, account_count) VALUES ($1, $2)', [userIp, 1]);
+            await supabase
+                .from('ip_limits')
+                .insert({ ip: userIp, account_count: 1 });
         }
         
         req.session.captchaText = null;
@@ -337,11 +459,24 @@ app.post('/register', async (req, res) => {
 });
 
 app.get('/login', (req, res) => res.render('login', { user: req.session.user, error: null, title: 'Вход' }));
+
 app.post('/login', async (req, res) => {
-    const user = (await pool.query('SELECT * FROM users WHERE username = $1', [req.body.username])).rows[0];
+    const { data: user } = await supabase
+        .from('users')
+        .select('*')
+        .eq('username', req.body.username)
+        .single();
+    
     if (user && bcrypt.compareSync(req.body.password, user.password)) {
         if (user.is_banned) return res.render('login', { user: req.session.user, error: `Забанен: ${user.ban_reason}`, title: 'Вход' });
-        req.session.user = { id: user.id, username: user.username, avatar: user.avatar, is_admin: user.is_admin, is_verified: user.is_verified, reputation: user.reputation };
+        req.session.user = { 
+            id: user.id, 
+            username: user.username, 
+            avatar: user.avatar, 
+            is_admin: user.is_admin, 
+            is_verified: user.is_verified, 
+            reputation: user.reputation 
+        };
         res.redirect('/');
     } else {
         res.render('login', { user: req.session.user, error: 'Неверные данные', title: 'Вход' });
@@ -355,54 +490,83 @@ app.get('/create', (req, res) => {
     res.render('create', { user: req.session.user, title: 'Создать пост' });
 });
 
-// СОЗДАНИЕ ПОСТА С ЗАГРУЗКОЙ В SUPABASE
 app.post('/create', upload.single('media'), async (req, res) => {
     if (!req.session.user) return res.redirect('/login');
     
-    let mediaUrl = null;
+    let imageUrl = null;
     if (req.file) {
-        const fileExt = path.extname(req.file.originalname);
-        const fileName = `${Date.now()}${fileExt}`;
         const fileBuffer = fs.readFileSync(req.file.path);
+        const fileName = `${Date.now()}${path.extname(req.file.originalname)}`;
         
         const { error } = await supabase.storage
             .from('uploads')
-            .upload(`posts/${fileName}`, fileBuffer, {
-                contentType: req.file.mimetype
-            });
+            .upload(`posts/${fileName}`, fileBuffer, { contentType: req.file.mimetype });
         
         if (!error) {
             const { data: { publicUrl } } = supabase.storage
                 .from('uploads')
                 .getPublicUrl(`posts/${fileName}`);
-            mediaUrl = publicUrl;
+            imageUrl = publicUrl;
         }
+        
+        fs.unlinkSync(req.file.path);
     }
     
-    await pool.query('INSERT INTO posts (title, description, image, username) VALUES ($1, $2, $3, $4)', 
-        [req.body.title, req.body.description, mediaUrl, req.session.user.username]);
+    await supabase
+        .from('posts')
+        .insert({ title: req.body.title, description: req.body.description, image: imageUrl, username: req.session.user.username });
+    
     res.redirect('/');
 });
 
 app.get('/settings', async (req, res) => {
     if (!req.session.user) return res.redirect('/login');
-    const user = (await pool.query('SELECT * FROM users WHERE id = $1', [req.session.user.id])).rows[0];
+    const { data: user } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', req.session.user.id)
+        .single();
     req.session.user = { ...req.session.user, ...user };
     res.render('settings', { user: req.session.user, error: null, success: null, title: 'Настройки' });
 });
 
 app.post('/settings/avatar', upload.single('avatar'), async (req, res) => {
     if (!req.session.user) return res.redirect('/login');
-    const avatar = req.file ? req.file.filename : 'default.png';
-    await pool.query('UPDATE users SET avatar = $1 WHERE id = $2', [avatar, req.session.user.id]);
-    req.session.user.avatar = avatar;
+    
+    let avatarUrl = 'default.png';
+    if (req.file) {
+        const fileBuffer = fs.readFileSync(req.file.path);
+        const fileName = `avatars/${req.session.user.id}_${Date.now()}${path.extname(req.file.originalname)}`;
+        
+        const { error } = await supabase.storage
+            .from('uploads')
+            .upload(fileName, fileBuffer, { contentType: req.file.mimetype });
+        
+        if (!error) {
+            const { data: { publicUrl } } = supabase.storage
+                .from('uploads')
+                .getPublicUrl(fileName);
+            avatarUrl = publicUrl;
+        }
+        
+        fs.unlinkSync(req.file.path);
+    }
+    
+    await supabase
+        .from('users')
+        .update({ avatar: avatarUrl })
+        .eq('id', req.session.user.id);
+    req.session.user.avatar = avatarUrl;
     res.redirect('/settings');
 });
 
 app.post('/settings/username', async (req, res) => {
     if (!req.session.user) return res.redirect('/login');
     try {
-        await pool.query('UPDATE users SET username = $1 WHERE id = $2', [req.body.username, req.session.user.id]);
+        await supabase
+            .from('users')
+            .update({ username: req.body.username })
+            .eq('id', req.session.user.id);
         req.session.user.username = req.body.username;
         res.redirect('/settings');
     } catch(e) {
@@ -413,10 +577,21 @@ app.post('/settings/username', async (req, res) => {
 app.post('/settings/password', async (req, res) => {
     if (!req.session.user) return res.redirect('/login');
     const { oldPassword, newPassword, confirmPassword } = req.body;
-    if (newPassword !== confirmPassword) return res.render('settings', { user: req.session.user, error: 'Новые пароли не совпадают', success: null, title: 'Настройки' });
-    const user = (await pool.query('SELECT password FROM users WHERE id = $1', [req.session.user.id])).rows[0];
+    if (newPassword !== confirmPassword) {
+        return res.render('settings', { user: req.session.user, error: 'Новые пароли не совпадают', success: null, title: 'Настройки' });
+    }
+    
+    const { data: user } = await supabase
+        .from('users')
+        .select('password')
+        .eq('id', req.session.user.id)
+        .single();
+    
     if (bcrypt.compareSync(oldPassword, user.password)) {
-        await pool.query('UPDATE users SET password = $1 WHERE id = $2', [bcrypt.hashSync(newPassword, 10), req.session.user.id]);
+        await supabase
+            .from('users')
+            .update({ password: bcrypt.hashSync(newPassword, 10) })
+            .eq('id', req.session.user.id);
         res.render('settings', { user: req.session.user, error: null, success: 'Пароль изменён', title: 'Настройки' });
     } else {
         res.render('settings', { user: req.session.user, error: 'Неверный текущий пароль', success: null, title: 'Настройки' });
@@ -425,60 +600,86 @@ app.post('/settings/password', async (req, res) => {
 
 app.get('/messages', async (req, res) => {
     if (!req.session.user) return res.redirect('/login');
-    const conversationsRaw = await pool.query(`
-        SELECT DISTINCT 
-            CASE 
-                WHEN from_user_id = $1 THEN to_user_id
-                ELSE from_user_id
-            END as other_user_id
-        FROM messages 
-        WHERE from_user_id = $1 OR to_user_id = $1
-    `, [req.session.user.id]);
+    
+    const { data: messages } = await supabase
+        .from('messages')
+        .select('*')
+        .or(`from_user_id.eq.${req.session.user.id},to_user_id.eq.${req.session.user.id}`);
+    
+    const userIds = new Set();
+    (messages || []).forEach(msg => {
+        if (msg.from_user_id !== req.session.user.id) userIds.add(msg.from_user_id);
+        if (msg.to_user_id !== req.session.user.id) userIds.add(msg.to_user_id);
+    });
     
     const conversations = [];
-    for (const conv of conversationsRaw.rows) {
-        const otherUser = (await pool.query('SELECT id, username, avatar FROM users WHERE id = $1', [conv.other_user_id])).rows[0];
+    for (const userId of userIds) {
+        const { data: otherUser } = await supabase
+            .from('users')
+            .select('id, username, avatar')
+            .eq('id', userId)
+            .single();
+        
         if (otherUser) {
-            const lastMessage = (await pool.query(`
-                SELECT message, created_at FROM messages 
-                WHERE (from_user_id = $1 AND to_user_id = $2) 
-                   OR (from_user_id = $2 AND to_user_id = $1)
-                ORDER BY created_at DESC LIMIT 1
-            `, [req.session.user.id, otherUser.id])).rows[0];
-            const unread = (await pool.query(`
-                SELECT COUNT(*) as count FROM messages 
-                WHERE to_user_id = $1 AND from_user_id = $2 AND is_read = 0
-            `, [req.session.user.id, otherUser.id])).rows[0];
+            const { data: lastMsg } = await supabase
+                .from('messages')
+                .select('message, created_at')
+                .or(`and(from_user_id.eq.${req.session.user.id},to_user_id.eq.${userId}),and(from_user_id.eq.${userId},to_user_id.eq.${req.session.user.id})`)
+                .order('created_at', { ascending: false })
+                .limit(1);
+            
+            const { count: unread } = await supabase
+                .from('messages')
+                .select('*', { count: 'exact', head: true })
+                .eq('to_user_id', req.session.user.id)
+                .eq('from_user_id', userId)
+                .eq('is_read', 0);
+            
             conversations.push({
                 other_user_id: otherUser.id,
                 username: otherUser.username,
                 avatar: otherUser.avatar,
-                last_message: lastMessage ? lastMessage.message : null,
-                unread: unread ? parseInt(unread.count) : 0
+                last_message: lastMsg?.[0]?.message || null,
+                unread: unread || 0
             });
         }
     }
+    
     res.render('messages', { user: req.session.user, conversations, title: 'Сообщения' });
 });
 
 app.get('/messages/chat/:userId', async (req, res) => {
     if (!req.session.user) return res.redirect('/login');
-    const otherUser = (await pool.query('SELECT id, username, avatar FROM users WHERE id = $1', [req.params.userId])).rows[0];
+    
+    const { data: otherUser } = await supabase
+        .from('users')
+        .select('id, username, avatar')
+        .eq('id', req.params.userId)
+        .single();
+    
     if (!otherUser) return res.redirect('/messages');
-    await pool.query('UPDATE messages SET is_read = 1 WHERE from_user_id = $1 AND to_user_id = $2', [otherUser.id, req.session.user.id]);
-    const messages = (await pool.query(`
-        SELECT * FROM messages 
-        WHERE (from_user_id = $1 AND to_user_id = $2) 
-           OR (from_user_id = $2 AND to_user_id = $1)
-        ORDER BY created_at ASC
-    `, [req.session.user.id, otherUser.id])).rows;
-    res.render('chat', { user: req.session.user, otherUser, messages, title: `Чат с ${otherUser.username}` });
+    
+    await supabase
+        .from('messages')
+        .update({ is_read: 1 })
+        .eq('from_user_id', otherUser.id)
+        .eq('to_user_id', req.session.user.id);
+    
+    const { data: messages } = await supabase
+        .from('messages')
+        .select('*')
+        .or(`and(from_user_id.eq.${req.session.user.id},to_user_id.eq.${otherUser.id}),and(from_user_id.eq.${otherUser.id},to_user_id.eq.${req.session.user.id})`)
+        .order('created_at', { ascending: true });
+    
+    res.render('chat', { user: req.session.user, otherUser, messages: messages || [], title: `Чат с ${otherUser.username}` });
 });
 
 app.post('/messages/send/:userId', async (req, res) => {
     if (!req.session.user) return res.redirect('/login');
     if (req.body.message && req.body.message.trim()) {
-        await pool.query('INSERT INTO messages (from_user_id, to_user_id, message) VALUES ($1, $2, $3)', [req.session.user.id, req.params.userId, req.body.message.trim()]);
+        await supabase
+            .from('messages')
+            .insert({ from_user_id: req.session.user.id, to_user_id: req.params.userId, message: req.body.message.trim() });
     }
     res.redirect(`/messages/chat/${req.params.userId}`);
 });
@@ -489,22 +690,43 @@ app.get('/admin', async (req, res) => {
     
     const stats = {
         totalUsers: await getActiveUsersCount(),
-        totalPosts: (await pool.query('SELECT COUNT(*) as count FROM posts')).rows[0].count,
-        totalComments: (await pool.query('SELECT COUNT(*) as count FROM comments')).rows[0].count,
-        totalMessages: (await pool.query('SELECT COUNT(*) as count FROM messages')).rows[0].count
+        totalPosts: (await supabase.from('posts').select('*', { count: 'exact', head: true })).count,
+        totalComments: (await supabase.from('comments').select('*', { count: 'exact', head: true })).count,
+        totalMessages: (await supabase.from('messages').select('*', { count: 'exact', head: true })).count
     };
-    const allUsers = (await pool.query('SELECT * FROM users ORDER BY reputation DESC, created_at DESC')).rows;
-    const allPosts = (await pool.query('SELECT * FROM posts ORDER BY created_at DESC LIMIT 20')).rows;
     
-    res.render('admin', { user: req.session.user, stats, allUsers, allPosts, title: 'Админ-панель' });
+    const { data: allUsers } = await supabase
+        .from('users')
+        .select('*')
+        .order('reputation', { ascending: false });
+    
+    const { data: allPosts } = await supabase
+        .from('posts')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(20);
+    
+    res.render('admin', { user: req.session.user, stats, allUsers: allUsers || [], allPosts: allPosts || [], title: 'Админ-панель' });
 });
 
 app.post('/admin/user/:id/verify', async (req, res) => {
     if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
-    const user = (await pool.query('SELECT is_verified FROM users WHERE id = $1', [req.params.id])).rows[0];
+    
+    const { data: user } = await supabase
+        .from('users')
+        .select('is_verified')
+        .eq('id', req.params.id)
+        .single();
+    
     if (user) {
         const newStatus = user.is_verified === 1 ? 0 : 1;
-        await pool.query('UPDATE users SET is_verified = $1 WHERE id = $2', [newStatus, req.params.id]);
+        await supabase
+            .from('users')
+            .update({ is_verified: newStatus })
+            .eq('id', req.params.id);
+        if (newStatus === 1) {
+            await supabase.rpc('update_reputation', { user_id: req.params.id, delta: 20 });
+        }
     }
     res.redirect('/admin');
 });
@@ -512,42 +734,64 @@ app.post('/admin/user/:id/verify', async (req, res) => {
 app.post('/admin/user/:id/ban', async (req, res) => {
     if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
     const reason = req.body.reason || 'Нарушение правил';
-    await pool.query('UPDATE users SET is_banned = 1, ban_reason = $1 WHERE id = $2', [reason, req.params.id]);
+    await supabase
+        .from('users')
+        .update({ is_banned: 1, ban_reason: reason })
+        .eq('id', req.params.id);
     res.redirect('/admin');
 });
 
 app.post('/admin/user/:id/unban', async (req, res) => {
     if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
-    await pool.query('UPDATE users SET is_banned = 0, ban_reason = "" WHERE id = $1', [req.params.id]);
+    await supabase
+        .from('users')
+        .update({ is_banned: 0, ban_reason: '' })
+        .eq('id', req.params.id);
     res.redirect('/admin');
 });
 
 app.post('/admin/user/:id/makeadmin', async (req, res) => {
     if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
-    await pool.query('UPDATE users SET is_admin = 1 WHERE id = $1', [req.params.id]);
+    await supabase
+        .from('users')
+        .update({ is_admin: 1 })
+        .eq('id', req.params.id);
     res.redirect('/admin');
 });
 
 app.post('/admin/user/:id/removeadmin', async (req, res) => {
     if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
-    await pool.query('UPDATE users SET is_admin = 0 WHERE id = $1', [req.params.id]);
+    await supabase
+        .from('users')
+        .update({ is_admin: 0 })
+        .eq('id', req.params.id);
     res.redirect('/admin');
 });
 
 app.post('/admin/user/:id/addreputation', async (req, res) => {
     if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
     const amount = parseInt(req.body.amount) || 0;
-    await pool.query('UPDATE users SET reputation = reputation + $1 WHERE id = $2', [amount, req.params.id]);
+    await supabase.rpc('update_reputation', { user_id: req.params.id, delta: amount });
     res.redirect('/admin');
 });
 
 app.post('/admin/post/:id/delete', async (req, res) => {
     if (!req.session.user || req.session.user.is_admin !== 1) return res.redirect('/admin');
-    await pool.query('DELETE FROM comments WHERE post_id = $1', [req.params.id]);
-    await pool.query('DELETE FROM reactions WHERE post_id = $1', [req.params.id]);
-    await pool.query('DELETE FROM posts WHERE id = $1', [req.params.id]);
+    await supabase.from('comments').delete().eq('post_id', req.params.id);
+    await supabase.from('reactions').delete().eq('post_id', req.params.id);
+    await supabase.from('posts').delete().eq('id', req.params.id);
     res.redirect('/admin');
 });
 
+// ========== ОБРАБОТКА ОШИБОК ==========
+app.use((req, res) => {
+    res.status(404).render('error', { 
+        user: req.session.user, 
+        error: 'Страница не найдена', 
+        code: 404, 
+        url: req.url 
+    });
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Сервер запущен: http://localhost:${PORT}`));    
+app.listen(PORT, () => console.log(`🚀 Сервер запущен: http://localhost:${PORT}`));

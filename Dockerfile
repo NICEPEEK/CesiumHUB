@@ -2,15 +2,12 @@ FROM node:20-slim
 
 WORKDIR /app
 
-# Копируем package.json и устанавливаем зависимости
 COPY package*.json ./
 RUN npm ci --only=production
 
-# Копируем код приложения
 COPY . .
 
-# Создаём папку для базы данных (будет смонтирована в Volume)
-RUN mkdir -p /data
+RUN mkdir -p /data/uploads
 
 EXPOSE 3000
 
