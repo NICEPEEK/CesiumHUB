@@ -136,11 +136,34 @@ try {
 // ========== НАСТРОЙКА ЗАГРУЗКИ ФАЙЛОВ ==========
 const uploadDir = './public/uploads';
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
+// Функция для генерации уникального имени файла
+function getUniqueFilename(originalname) {
+    const ext = path.extname(originalname);
+    const basename = path.basename(originalname, ext);
+    let filename = `${basename}${ext}`;
+    let counter = 1;
+    
+    while (fs.existsSync(path.join(uploadDir, filename))) {
+        filename = `${basename}_${counter}${ext}`;
+        counter++;
+    }
+    return filename;
+}
+
+// Настройка multer с ограничением 8MB
 const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, uploadDir),
-    filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
+    filename: (req, file, cb) => {
+        const uniqueName = getUniqueFilename(file.originalname);
+        cb(null, uniqueName);
+    }
 });
-const upload = multer({ storage: storage });
+
+const upload = multer({ 
+    storage: storage,
+    limits: { fileSize: 8 * 1024 * 1024 } // 8 MB
+});
 
 // ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 function getReputationLevel(reputation) {
@@ -308,42 +331,35 @@ app.post('/post/:id/react', (req, res) => {
     const postId = req.params.id;
     const existing = db.prepare('SELECT type FROM reactions WHERE user_id = ? AND post_id = ?').get(userId, postId);
     
-    // Получаем автора поста для обновления репутации
     const post = db.prepare('SELECT username FROM posts WHERE id = ?').get(postId);
     const author = post ? db.prepare('SELECT id FROM users WHERE username = ?').get(post.username) : null;
     const isSelf = author && author.id === userId;
     
     if (existing) {
         if (existing.type === type) {
-            // Отмена реакции
             db.prepare('DELETE FROM reactions WHERE user_id = ? AND post_id = ?').run(userId, postId);
             db.prepare(`UPDATE posts SET ${type}s = ${type}s - 1 WHERE id = ?`).run(postId);
             
-            // Отнимаем репутацию если это был лайк и не себе
             if (type === 'like' && author && !isSelf) {
                 updateReputation(author.id, -1);
             }
         } else {
-            // Смена реакции
             const opposite = type === 'like' ? 'dislike' : 'like';
             db.prepare('UPDATE reactions SET type = ? WHERE user_id = ? AND post_id = ?').run(type, userId, postId);
             db.prepare(`UPDATE posts SET ${type}s = ${type}s + 1, ${opposite}s = ${opposite}s - 1 WHERE id = ?`).run(postId);
             
-            // Обновляем репутацию при смене реакции
             if (author && !isSelf) {
                 if (type === 'like') {
-                    updateReputation(author.id, 2); // +2 (компенсируем -1 и добавляем +1)
+                    updateReputation(author.id, 2);
                 } else if (type === 'dislike') {
-                    updateReputation(author.id, -2); // -2
+                    updateReputation(author.id, -2);
                 }
             }
         }
     } else {
-        // Новая реакция
         db.prepare('INSERT INTO reactions (user_id, post_id, type) VALUES (?, ?, ?)').run(userId, postId, type);
         db.prepare(`UPDATE posts SET ${type}s = ${type}s + 1 WHERE id = ?`).run(postId);
         
-        // Добавляем репутацию за лайк (не за свой)
         if (type === 'like' && author && !isSelf) {
             updateReputation(author.id, 1);
         } else if (type === 'dislike' && author && !isSelf) {
@@ -430,34 +446,46 @@ app.get('/create', (req, res) => {
     res.render('create', { user: req.session.user, title: 'Создать пост', error: null });
 });
 
-app.post('/create', upload.single('media'), (req, res) => {
-    if (!req.session.user) return res.redirect('/login');
-    
-    // Проверка на 5 минут
-    const lastPost = db.prepare('SELECT last_post_time FROM post_limits WHERE user_id = ?').get(req.session.user.id);
-    if (lastPost) {
-        const lastTime = new Date(lastPost.last_post_time);
-        const now = new Date();
-        const diffMinutes = (now - lastTime) / 1000 / 60;
-        if (diffMinutes < 5) {
-            const waitMinutes = Math.ceil(5 - diffMinutes);
-            return res.render('create', { 
-                user: req.session.user, 
-                title: 'Создать пост', 
-                error: `Вы можете создать следующий пост через ${waitMinutes} минут(ы)`
-            });
+app.post('/create', (req, res, next) => {
+    upload.single('media')(req, res, function(err) {
+        if (err) {
+            if (err.code === 'LIMIT_FILE_SIZE') {
+                return res.render('create', { 
+                    user: req.session.user, 
+                    title: 'Создать пост', 
+                    error: 'Файл слишком большой. Максимальный размер 8 МБ'
+                });
+            }
+            return next(err);
         }
-    }
-    
-    const media = req.file ? req.file.filename : null;
-    db.prepare('INSERT INTO posts (title, description, image, username) VALUES (?, ?, ?, ?)')
-        .run(req.body.title, req.body.description, media, req.session.user.username);
-    
-    // Обновляем время последнего поста
-    db.prepare(`INSERT OR REPLACE INTO post_limits (user_id, last_post_time) VALUES (?, CURRENT_TIMESTAMP)`)
-        .run(req.session.user.id);
-    
-    res.redirect('/');
+        
+        if (!req.session.user) return res.redirect('/login');
+        
+        // Проверка на 5 минут
+        const lastPost = db.prepare('SELECT last_post_time FROM post_limits WHERE user_id = ?').get(req.session.user.id);
+        if (lastPost) {
+            const lastTime = new Date(lastPost.last_post_time);
+            const now = new Date();
+            const diffMinutes = (now - lastTime) / 1000 / 60;
+            if (diffMinutes < 5) {
+                const waitMinutes = Math.ceil(5 - diffMinutes);
+                return res.render('create', { 
+                    user: req.session.user, 
+                    title: 'Создать пост', 
+                    error: `Вы можете создать следующий пост через ${waitMinutes} минут(ы)`
+                });
+            }
+        }
+        
+        const media = req.file ? req.file.filename : null;
+        db.prepare('INSERT INTO posts (title, description, image, username) VALUES (?, ?, ?, ?)')
+            .run(req.body.title, req.body.description, media, req.session.user.username);
+        
+        db.prepare(`INSERT OR REPLACE INTO post_limits (user_id, last_post_time) VALUES (?, CURRENT_TIMESTAMP)`)
+            .run(req.session.user.id);
+        
+        res.redirect('/');
+    });
 });
 
 app.get('/settings', (req, res) => {
