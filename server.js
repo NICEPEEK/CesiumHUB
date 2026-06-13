@@ -7,13 +7,16 @@ const path = require('path');
 const fs = require('fs');
 const svgCaptcha = require('svg-captcha');
 const { createClient } = require('@supabase/supabase-js');
+const WebSocket = require('ws');
 
-const app = express();
-
-// Supabase клиент
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+const supabase = createClient(supabaseUrl, supabaseKey, {
+    realtime: {
+        transport: WebSocket
+    }
+});
+const app = express();
 
 // Подключение к PostgreSQL
 const pool = new Pool({
@@ -546,4 +549,4 @@ app.post('/admin/post/:id/delete', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Сервер запущен: http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Сервер запущен: http://localhost:${PORT}`));    
