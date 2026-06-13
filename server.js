@@ -9,7 +9,7 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 
-// Supabase клиент
+// Supabase клиент (без realtime, он нам не нужен)
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_ANON_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
@@ -24,124 +24,7 @@ app.use(session({
     cookie: { maxAge: 30 * 24 * 60 * 60 * 1000 }
 }));
 
-// ========== СОЗДАНИЕ ТАБЛИЦ ЧЕРЕЗ REST API ==========
-async function initDB() {
-    // Создаём таблицу users
-    await supabase.from('users').select('id').limit(1).catch(async () => {
-        await supabase.rpc('exec_sql', { query: `
-            CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY,
-                username TEXT UNIQUE,
-                password TEXT,
-                avatar TEXT DEFAULT 'default.png',
-                is_admin INTEGER DEFAULT 0,
-                is_verified INTEGER DEFAULT 0,
-                is_banned INTEGER DEFAULT 0,
-                ban_reason TEXT DEFAULT '',
-                reputation INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ` }).catch(e => console.log('Users table error:', e.message));
-    });
-
-    // Создаём таблицу posts
-    await supabase.from('posts').select('id').limit(1).catch(async () => {
-        await supabase.rpc('exec_sql', { query: `
-            CREATE TABLE IF NOT EXISTS posts (
-                id SERIAL PRIMARY KEY,
-                title TEXT,
-                description TEXT,
-                image TEXT,
-                username TEXT,
-                likes INTEGER DEFAULT 0,
-                dislikes INTEGER DEFAULT 0,
-                views INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ` }).catch(e => console.log('Posts table error:', e.message));
-    });
-
-    // Создаём таблицу comments
-    await supabase.from('comments').select('id').limit(1).catch(async () => {
-        await supabase.rpc('exec_sql', { query: `
-            CREATE TABLE IF NOT EXISTS comments (
-                id SERIAL PRIMARY KEY,
-                post_id INTEGER,
-                username TEXT,
-                text TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ` }).catch(e => console.log('Comments table error:', e.message));
-    });
-
-    // Создаём таблицу reactions
-    await supabase.from('reactions').select('user_id').limit(1).catch(async () => {
-        await supabase.rpc('exec_sql', { query: `
-            CREATE TABLE IF NOT EXISTS reactions (
-                user_id INTEGER,
-                post_id INTEGER,
-                type TEXT CHECK(type IN ('like', 'dislike')),
-                PRIMARY KEY (user_id, post_id)
-            )
-        ` }).catch(e => console.log('Reactions table error:', e.message));
-    });
-
-    // Создаём таблицу messages
-    await supabase.from('messages').select('id').limit(1).catch(async () => {
-        await supabase.rpc('exec_sql', { query: `
-            CREATE TABLE IF NOT EXISTS messages (
-                id SERIAL PRIMARY KEY,
-                from_user_id INTEGER,
-                to_user_id INTEGER,
-                message TEXT,
-                is_read INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ` }).catch(e => console.log('Messages table error:', e.message));
-    });
-
-    // Создаём таблицу ip_limits
-    await supabase.from('ip_limits').select('ip').limit(1).catch(async () => {
-        await supabase.rpc('exec_sql', { query: `
-            CREATE TABLE IF NOT EXISTS ip_limits (
-                ip TEXT PRIMARY KEY,
-                account_count INTEGER DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ` }).catch(e => console.log('Ip_limits table error:', e.message));
-    });
-
-    // Создаём админа NICEPEEK
-    const { data: adminCheck } = await supabase
-        .from('users')
-        .select('*')
-        .eq('username', 'NICEPEEK')
-        .single();
-
-    if (!adminCheck) {
-        const hashedPassword = bcrypt.hashSync('nicepeek123', 10);
-        await supabase
-            .from('users')
-            .insert({ username: 'NICEPEEK', password: hashedPassword, is_admin: 1, is_verified: 1, reputation: 100 });
-        console.log('Администратор NICEPEEK создан');
-    }
-    
-    console.log('База данных готова');
-}
-
-// Запускаем инициализацию
-initDB().catch(console.error);
-
-// ========== НАСТРОЙКА ЗАГРУЗКИ ==========
-const tempDir = './temp';
-if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, tempDir),
-    filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
-});
-const upload = multer({ storage: storage });
-
-// ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+// ========== ФУНКЦИЯ ДЛЯ РЕПУТАЦИИ ==========
 function getReputationLevel(reputation) {
     if (reputation >= 100) return { class: 'reputation-positive', text: 'Легенда' };
     if (reputation >= 50) return { class: 'reputation-positive', text: 'Звезда' };
@@ -151,6 +34,7 @@ function getReputationLevel(reputation) {
     return { class: 'reputation-negative', text: 'Плохая' };
 }
 
+// ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 async function getAuthorInfo(username) {
     const { data } = await supabase
         .from('users')
@@ -172,35 +56,35 @@ async function getUserReaction(userId, postId) {
 }
 
 async function getPostsWithDetails(query, params = [], userId = null) {
-    let posts;
-    if (query === 'SELECT * FROM posts ORDER BY created_at DESC') {
+    let posts = [];
+    
+    if (query.includes('ORDER BY created_at DESC') && !query.includes('WHERE')) {
         const { data } = await supabase
             .from('posts')
             .select('*')
             .order('created_at', { ascending: false });
-        posts = data;
+        posts = data || [];
     } else if (query.includes('WHERE username =')) {
         const { data } = await supabase
             .from('posts')
             .select('*')
             .eq('username', params[0])
             .order('created_at', { ascending: false });
-        posts = data;
+        posts = data || [];
     } else if (query.includes('WHERE id =')) {
         const { data } = await supabase
             .from('posts')
             .select('*')
-            .eq('id', params[0]);
-        posts = data;
+            .eq('id', parseInt(params[0]))
+            .single();
+        posts = data ? [data] : [];
     } else {
         const { data } = await supabase
             .from('posts')
             .select('*')
             .order('created_at', { ascending: false });
-        posts = data;
+        posts = data || [];
     }
-    
-    if (!posts) return [];
     
     for (const post of posts) {
         const { data: comments } = await supabase
@@ -239,6 +123,15 @@ async function getActiveUsersCount() {
     return count || 0;
 }
 
+// ========== НАСТРОЙКА ЗАГРУЗКИ ==========
+const tempDir = './temp';
+if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, tempDir),
+    filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
+});
+const upload = multer({ storage: storage });
+
 // ========== КАПЧА ==========
 app.get('/captcha', (req, res) => {
     const captcha = svgCaptcha.create({
@@ -253,6 +146,92 @@ app.get('/captcha', (req, res) => {
     res.type('svg');
     res.send(captcha.data);
 });
+
+// ========== СОЗДАНИЕ ТАБЛИЦ (через REST API, без RPC) ==========
+async function initTables() {
+    // Проверяем существование таблицы users
+    const { error: usersError } = await supabase.from('users').select('id').limit(1);
+    if (usersError && usersError.message.includes('relation') && usersError.message.includes('does not exist')) {
+        console.log('Таблицы будут созданы через SQL в Supabase Dashboard');
+        console.log('Пожалуйста, выполните следующий SQL в Supabase SQL Editor:');
+        console.log(`
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    username TEXT UNIQUE,
+    password TEXT,
+    avatar TEXT DEFAULT 'default.png',
+    is_admin INTEGER DEFAULT 0,
+    is_verified INTEGER DEFAULT 0,
+    is_banned INTEGER DEFAULT 0,
+    ban_reason TEXT DEFAULT '',
+    reputation INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE posts (
+    id SERIAL PRIMARY KEY,
+    title TEXT,
+    description TEXT,
+    image TEXT,
+    username TEXT,
+    likes INTEGER DEFAULT 0,
+    dislikes INTEGER DEFAULT 0,
+    views INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE comments (
+    id SERIAL PRIMARY KEY,
+    post_id INTEGER,
+    username TEXT,
+    text TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE reactions (
+    user_id INTEGER,
+    post_id INTEGER,
+    type TEXT CHECK(type IN ('like', 'dislike')),
+    PRIMARY KEY (user_id, post_id)
+);
+
+CREATE TABLE messages (
+    id SERIAL PRIMARY KEY,
+    from_user_id INTEGER,
+    to_user_id INTEGER,
+    message TEXT,
+    is_read INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE ip_limits (
+    ip TEXT PRIMARY KEY,
+    account_count INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+        `);
+    }
+    
+    // Создаём админа NICEPEEK
+    const { data: adminCheck } = await supabase
+        .from('users')
+        .select('*')
+        .eq('username', 'NICEPEEK')
+        .single();
+    
+    if (!adminCheck) {
+        const hashedPassword = bcrypt.hashSync('nicepeek123', 10);
+        await supabase
+            .from('users')
+            .insert({ username: 'NICEPEEK', password: hashedPassword, is_admin: 1, is_verified: 1, reputation: 100 });
+        console.log('Администратор NICEPEEK создан');
+    }
+    
+    console.log('База данных готова');
+}
+
+// Запускаем инициализацию
+initTables();
 
 // ========== МАРШРУТЫ ==========
 app.get('/', async (req, res) => {
